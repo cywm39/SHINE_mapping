@@ -1,10 +1,10 @@
 setting:
   name: "kitti_incre_reg"
   output_root: "./experiments/"
-  pc_path: "xxx/data/kitti/sequences/00/velodyne"
-  label_path: "xxx/data/kitti/sequences/00/labels" # optional for semantic mapping
-  pose_path: "xxx/data/kitti/sequences/00/poses.txt"
-  calib_path: "xxx/data/kitti/sequences/00/calib.txt"
+  pc_path: "./data/kitti_example/sequences/00/velodyne"
+  label_path: "./data/kitti_example/sequences/00/labels" # optional for semantic mapping
+  pose_path: "./data/kitti_example/sequences/00/poses.txt"
+  calib_path: "./data/kitti_example/sequences/00/calib.txt"
   load_model: False
   model_path: "" 
   first_frame_ref: False
@@ -66,3 +66,4 @@ eval:
   mc_local: False
   mc_vis_level: 1
   save_map: False # save the sdf map or not 
+

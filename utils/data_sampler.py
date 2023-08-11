@@ -100,6 +100,7 @@ class dataSampler():
             weight_tensor *= dropoff_weight
         
         # give a flag indicating the type of the sample [negative: freespace, positive: surface]
+        # TODO sample点实际上有三种类型，但是这里只规定了surface和freespace的标记
         weight_tensor[point_num*surface_sample_n:] *= -1.0 
         
         # ray-wise depth

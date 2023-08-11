@@ -66,4 +66,3 @@ eval:
   mc_local: False
   mc_vis_level: 1
   save_map: False # save the sdf map or not 
-

@@ -201,6 +201,8 @@ class LiDARDataset(Dataset):
         # print("Frame point cloud count:", frame_pc_s_torch.shape[0])
 
         # sampling the points
+        # coord: 所有采样点坐标; sdf_label: 所有采样点sdf真值; weight: 所有采样点的类型，包括surface和free; 
+        # sample_depth: 所有采样点的深度; ray_depth: 输入的点云中所有点的深度
         (coord, sdf_label, normal_label, sem_label, weight, sample_depth, ray_depth) = \
             self.sampler.sample(frame_pc_s_torch, frame_origin_torch, \
             frame_normal_torch, frame_label_torch)
@@ -211,6 +213,7 @@ class LiDARDataset(Dataset):
         # update feature octree
         if self.octree is not None:
             if self.config.octree_from_surface_samples:
+                # 不是根据读取的点云来增加octree，而是根据sample的点来增加octree
                 # update with the sampled surface points
                 self.octree.update(coord[weight > 0, :].to(self.device), incremental_on)
             else:
@@ -448,4 +451,5 @@ class LiDARDataset(Dataset):
             weight = self.weight_pool[index].to(self.device)
 
             return coord, sdf_label, origin, ts, normal_label, sem_label, weight
+
 
