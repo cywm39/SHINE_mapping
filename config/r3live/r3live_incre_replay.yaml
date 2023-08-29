@@ -1,22 +1,23 @@
 setting:
-  name: "ncd_incre_reg"
+  name: "r3live_incre_replay"
   output_root: "./experiments/"
-  pc_path: "./data/ncd_example/quad/pcd"
-  pose_path: "./data/ncd_example/quad/poses.txt"
-  calib_path: "./data/ncd_example/quad/calib.txt"
+  pc_path: "/home/cy/NeRF/shine_mapping_input/Map_pointcloud"
+  label_path: "" # optional for semantic mapping
+  pose_path: "/home/cy/NeRF/shine_mapping_input/Lidar_pose_kitti.txt"
+  calib_path: ""
   load_model: False
   model_path: "" 
   first_frame_ref: False
   begin_frame: 0
-  end_frame: 1300
-  every_frame: 5 # 1 means does not skip
+  end_frame: 862
+  every_frame: 1 # 1 means does not skip
   device: "cuda"
   gpu_id: "0"
 process:
-  min_range_m: 1.5
+  min_range_m: 3.0
   pc_radius_m: 50.0  # distance filter for each frame
-  min_z_m: -10.0
-  rand_downsample: False # use random or voxel downsampling
+  min_z_m: -3.5
+  rand_downsample: True # use random or voxel downsampling. default: False
   vox_down_m: 0.05
   rand_down_r: 0.2
 sampler:
@@ -26,10 +27,10 @@ sampler:
   free_sample_end_dist_m: 1.0
   free_sample_n: 3
 octree:
-  leaf_vox_size: 0.2
-  tree_level_world: 12
-  tree_level_feat: 3
-  feature_dim: 8
+  leaf_vox_size: 0.1 # default: 0.2
+  tree_level_world: 12 # default: 12
+  tree_level_feat: 3 # default: 3
+  feature_dim: 8 # default: 8
   poly_int_on: True
   octree_from_surface_samples: True
 decoder:
@@ -42,13 +43,13 @@ loss:
   sigma_sigmoid_m: 0.1
   loss_weight_on: False
   behind_dropoff_on: False
-  ekional_loss_on: False
+  ekional_loss_on: True
   weight_e: 0.1
 continual:
-  continual_learning_reg: True # using incremental mapping with regularization
-  lambda_forget: 1e4 # the larger this value, the model would be less likely to forget
-  window_replay_on: False # replay within the sliding window
-  window_radius_m: 0
+  continual_learning_reg: False # using incremental mapping with regularization
+  lambda_forget: 0 
+  window_replay_on: True # replay within the sliding window
+  window_radius_m: 50.0
 optimizer:
   iters: 50  # iterations per frame
   batch_size: 4096
@@ -59,9 +60,10 @@ eval:
   o3d_vis_on: True # visualize the mapping or not
   vis_freq_iters: 0 
   save_freq_iters: 10000 # save the model and octree every x iterations
-  mesh_freq_frame: 5 # reconstruct the mesh every x frames
+  mesh_freq_frame: 10 # reconstruct the mesh every x frames
   mc_res_m: 0.1 # reconstruction marching cubes resolution
   mc_with_octree: True # querying sdf only in certain levels of the octree
   mc_local: False
   mc_vis_level: 1
   save_map: False # save the sdf map or not 
+
