@@ -3,7 +3,7 @@ setting:
   output_root: "./experiments/"
   pc_path: "/home/cy/NeRF/shine_mapping_input/Map_pointcloud"
   label_path: "" # optional for semantic mapping
-  pose_path: "/home/cy/NeRF/shine_mapping_input/Lidar_pose_kitti.txt"
+  pose_path: "/home/cy/NeRF/shine_mapping_input/zero_pose.txt"
   calib_path: ""
   load_model: False
   model_path: "" 
@@ -14,22 +14,22 @@ setting:
   device: "cuda"
   gpu_id: "0"
 process:
-  min_range_m: 0.2 # default: 3.0
+  min_range_m: 1.5 # default: 3.0
   pc_radius_m: 50.0  # distance filter for each frame. Default value is 25.0
   min_z_m: -10.0 # defalut: -3.5
   rand_downsample: False # use random or voxel downsampling
   vox_down_m: 0.05
   rand_down_r: 0.2
 sampler:
-  surface_sample_range_m: 0.05 #default: 0.5
+  surface_sample_range_m: 0.5 #default: 0.5
   surface_sample_n: 3
-  free_sample_begin_ratio: 0.5 #default: 0.3
-  free_sample_end_dist_m: 0.3 #default: 1.0
+  free_sample_begin_ratio: 0.3 #default: 0.3
+  free_sample_end_dist_m: 1.0 #default: 1.0
   free_sample_n: 3
 octree:
-  leaf_vox_size: 0.02 #default: 0.2
+  leaf_vox_size: 0.2 #default: 0.2
   tree_level_world: 12
-  tree_level_feat: 4 # default: 3
+  tree_level_feat: 3 # default: 3
   feature_dim: 8
   poly_int_on: True
   octree_from_surface_samples: True
@@ -40,14 +40,14 @@ decoder:
 loss:
   ray_loss: False
   main_loss_type: sdf_bce  # select from sdf_bce (our proposed), sdf_l1, sdf_l2, dr, dr_neus
-  sigma_sigmoid_m: 0.02  # default: 0.1
+  sigma_sigmoid_m: 0.1  # default: 0.1
   loss_weight_on: False
   behind_dropoff_on: False
   ekional_loss_on: False
   weight_e: 0.1
 continual:
   continual_learning_reg: True # using incremental mapping with regularization
-  lambda_forget: 1e3 # the larger this value, the model would be less likely to forget. default: 1e4
+  lambda_forget: 1e4 # the larger this value, the model would be less likely to forget. default: 1e4
   window_replay_on: False # replay within the sliding window
   window_radius_m: 0
 optimizer:
@@ -57,13 +57,13 @@ optimizer:
   weight_decay: 1e-7 # l2 regularization
 eval:
   wandb_vis_on: False # log to wandb or not
-  o3d_vis_on: True # visualize the mapping or not
+  o3d_vis_on: False # visualize the mapping or not
   vis_freq_iters: 0 
   save_freq_iters: 10000 # save the model and octree every x iterations
-  mesh_freq_frame: 5 # reconstruct the mesh every x frames
-  mc_res_m: 0.02 # reconstruction marching cubes resolution. default: 0.1
+  mesh_freq_frame: 10000 # reconstruct the mesh every x frames
+  mc_res_m: 0.1 # reconstruction marching cubes resolution. default: 0.1
   mc_with_octree: True # querying sdf only in certain levels of the octree
   mc_local: False
-  mc_vis_level: 2 # default: 1
+  mc_vis_level: 1 # default: 1
   save_map: False # save the sdf map or not 
 

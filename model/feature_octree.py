@@ -47,6 +47,7 @@ class FeatureOctree(nn.Module):
         self.corners_lookup_tables = [] # from corner morton to corner index (top-down)
         self.nodes_lookup_tables = []   # from nodes morton to corner index (top-down)
         # Initialize the look up table for each level, each is a dictionary
+        # 为什么是max_level+1？
         for l in range(self.max_level+1):
             self.corners_lookup_tables.append({})
             self.nodes_lookup_tables.append({}) # actually the same speed as below
@@ -85,6 +86,7 @@ class FeatureOctree(nn.Module):
         return feature
 
     def get_morton(self, sample_points, level):
+        # 这个坐标转换函数将[-1,1]的点转换到整数坐标，可能unbatched_pointcloud_to_spc得到的spc里面所有坐标也是这么转换得到的整数坐标？
         points = kal.ops.spc.quantize_points(sample_points, level)  # quantize to interger coords
         points_morton = kal.ops.spc.points_to_morton(points) # to 1d morton code
         sample_points_with_morton = torch.hstack((sample_points, points_morton.view(-1, 1)))
@@ -97,6 +99,9 @@ class FeatureOctree(nn.Module):
         nodes_spc = kal.ops.spc.morton_to_points(nodes_morton)
         nodes_spc_np = nodes_spc.cpu().numpy()
         node_size = 2**(1-level) # in the -1 to 1 kaolin space
+        # 假设unbatched_pointcloud_to_spc函数得到的spc会类似于上面的quantize_points函数一样，将原来[-1,1]的点的坐标区间变成一个整数坐标
+        # 那这里由于是逆过程(从spc中点的坐标得到原始点的坐标)，所以这里的目的就是从整数坐标区间变成[-1,1]坐标区间
+        # 也即，原始点坐标是[-1,1]区间，octree或者说spc内的点的坐标是整数区间，unbatched_pointcloud_to_spc和这里都是在做变换
         nodes_coord_scaled = (nodes_spc_np * node_size) - 1. + 0.5 * node_size  # in the -1 to 1 kaolin space
         return nodes_coord_scaled
 
@@ -115,7 +120,10 @@ class FeatureOctree(nn.Module):
         # [0 1 2 3 ... max_level-1 max_level]
         spc = kal.ops.conversions.unbatched_pointcloud_to_spc(surface_points, self.max_level) 
         pyramid = spc.pyramids[0].cpu()
-        for i in range(self.max_level+1): # for each level (top-down)            
+        for i in range(self.max_level+1): # for each level (top-down)   
+            # 为什么没有feature的层不用更新？因为update函数要更新的就是两个lookup_tables和hier_features，
+            # 实际上这个FeatureOctree类根本没存储整个octree，只存了feature和两个lookup_tables，
+            # lidar扫描到的新的点直接通过kaolin库的unbatched_pointcloud_to_spc方法计算得到spc，从而转变为octree结构
             if i < self.free_level_num: # free levels (skip), only need to consider the featured levels
                 continue
             # level storing features (i>=free_level_num)
@@ -137,6 +145,7 @@ class FeatureOctree(nn.Module):
                 self.corners_lookup_tables[i] = corners_dict
                 # initializa corner features
                 fts = self.feature_std*torch.randn(len(corners_dict)+1, self.feature_dim, device=self.device) 
+                # 空出来的这最后一个是干啥的，下面那个weights也多出来一个
                 fts[-1] = torch.zeros(1,self.feature_dim)
                 # Be careful, the size of the feature list equals to featured_level_num not max_level+1
                 self.hier_features.append(nn.Parameter(fts)) 
@@ -153,6 +162,10 @@ class FeatureOctree(nn.Module):
                 new_fts = self.feature_std*torch.randn(new_feature_num+1, self.feature_dim, device=self.device) 
                 new_fts[-1] = torch.zeros(1,self.feature_dim)
                 cur_featured_level = i-self.free_level_num
+                # hier_features中的每一项都是个list，表示某一层的所有feature向量
+                # 每一层的feature向量的个数是corners点的个数，而不是扫描到的点(nodes)的个数，扫描到的点用来计算这些corners点
+                # 从上面的len(corners_dict)+1可以看到每一层的最后一个元素是额外多出来的，从set_zero函数可以看到最后这个元素是trashbin元素
+                # 虽然没搞清楚trashbin元素是干啥的，不过优化完毕需要调用set_zero函数把这个trashbin元素设置成零向量
                 self.hier_features[cur_featured_level] = nn.Parameter(torch.cat((self.hier_features[cur_featured_level][:-1],new_fts),0))
                 if incremental_on:
                     new_weights = torch.zeros(new_feature_num+1, self.feature_dim, device=self.device)
@@ -163,6 +176,12 @@ class FeatureOctree(nn.Module):
             indexes = torch.tensor([self.corners_lookup_tables[i][x] for x in corners_m]).reshape(-1,8).numpy().tolist()
             new_nodes_morton = kal.ops.spc.points_to_morton(new_nodes).cpu().numpy().tolist()
             for k in range(len(new_nodes_morton)):
+                # 从这里看出来，nodes_lookup_tables[i]这个字典，key是nodes的morton码，value是对应的node求出的**八**个corner点的index。
+                #   同时，key包含的其实就是这第i层的所有的nodes: 输入的新扫描的一帧点云，通过kaolin库函数直接计算得到分层的spc，其实就是octree,
+                #   之后遍历spc的每一层，找出每一层中所有nodes里新添加的nodes，并插入到nodes_lookup_tables里面
+                # 而corners_lookup_tables[i]这个字典，key是所有corner点的morton码，value是该corner点的index
+                # index实际上就是对这第i层的所有corner点的一个编码，也即：0 1 2 3 4 5 6 ......
+                # 这个index会用来查询hier_features里的feature
                 self.nodes_lookup_tables[i][new_nodes_morton[k]] = indexes[k]
 
         # nodes_coord = self.get_octree_nodes(self.max_level)
@@ -228,6 +247,12 @@ class FeatureOctree(nn.Module):
             # Interpolating
             # get the interpolation coefficients for the 8 neighboring corners, corresponding to the order of the hierarchical_indices
             coeffs = self.interpolat(coord,current_level,self.polynomial_interpolation) 
+            # coeffs决定了八个corners点对插值结果的影响，也就是个权重
+            # 给出一个点的坐标，遍历所有的level。对于当前level，查询当前点坐标的八个corner点，得到八个feature向量，将八个feature向量根据coeffs加权相加，
+            # 得到该点在当前level的插值feature结果。并且各个level的插值feature结果都会相加，level之间权重为1
+            # （下面的sum_features += 就实现了level之间相加的步骤，并且因为没有额外权重所以各level之间feature的权重都是1）
+            # 最后得到的sum_features是n*8的，n就是coord.shape[0]也就是要查询的点的个数，8就是feature维度（参数里设置的默认值是8）
+            # 所以在整个“给定点坐标，在octree中查询feature”过程中，这一步就完成了将octree的各个level的feature相加的步骤，而不是论文里图画的那样在输入网络之前才把各个level之间的feature相加
             sum_features += (self.hier_features[feature_level][hierarchical_indices[i]]*coeffs).sum(1) 
             # corner index -1 means the queried voxel is not in the leaf node. If so, we will get the trashbin row of the feature grid, 
             # and get the value 0, the feature for this level will then be 0
