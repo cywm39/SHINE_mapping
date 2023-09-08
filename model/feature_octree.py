@@ -116,6 +116,7 @@ class FeatureOctree(nn.Module):
 
     # update the octree according to new observations
     # if incremental_on = True, then we additional store the last frames' feature for regularization based incremental mapping
+    # update只在lidar_dataset.py中process_frame的时候被调用了，传递的surface_points都是scale后的坐标，也即[-1,1]空间内的坐标
     def update(self, surface_points, incremental_on = False):
         # [0 1 2 3 ... max_level-1 max_level]
         spc = kal.ops.conversions.unbatched_pointcloud_to_spc(surface_points, self.max_level) 
@@ -253,6 +254,7 @@ class FeatureOctree(nn.Module):
             # （下面的sum_features += 就实现了level之间相加的步骤，并且因为没有额外权重所以各level之间feature的权重都是1）
             # 最后得到的sum_features是n*8的，n就是coord.shape[0]也就是要查询的点的个数，8就是feature维度（参数里设置的默认值是8）
             # 所以在整个“给定点坐标，在octree中查询feature”过程中，这一步就完成了将octree的各个level的feature相加的步骤，而不是论文里图画的那样在输入网络之前才把各个level之间的feature相加
+            # TODO hier_features是单纯一个list，查询方式也就是下标直接查询，那这里好像根本没涉及到hash加速？为什么论文里说用了hash?
             sum_features += (self.hier_features[feature_level][hierarchical_indices[i]]*coeffs).sum(1) 
             # corner index -1 means the queried voxel is not in the leaf node. If so, we will get the trashbin row of the feature grid, 
             # and get the value 0, the feature for this level will then be 0

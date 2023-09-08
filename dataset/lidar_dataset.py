@@ -48,7 +48,7 @@ class LiDARDataset(Dataset):
 
         # point cloud files
         self.pc_filenames = natsorted(os.listdir(config.pc_path)) # sort files as 1, 2,… 9, 10 not 1, 10, 100 with natsort
-        self.total_pc_count = len(self.pc_filenames)
+        self.total_pc_count = len(self.pc_filenames) # 文件夹下面总共的点云文件个数
 
         # feature octree
         self.octree = octree
@@ -60,13 +60,14 @@ class LiDARDataset(Dataset):
         self.ray_sample_count = config.surface_sample_n + config.free_sample_n
 
         # merged downsampled point cloud
+        # 全局点云地图，只用来记录，最后如果选择要保存点云地图会进行输出
         self.map_down_pc = o3d.geometry.PointCloud()
         # map bounding box in the world coordinate system
-        self.map_bbx = o3d.geometry.AxisAlignedBoundingBox()
+        self.map_bbx = o3d.geometry.AxisAlignedBoundingBox() # 全局点云地图的bbx，这个和下面那个bbx都没作用
         self.cur_bbx = o3d.geometry.AxisAlignedBoundingBox()
 
         # get the pose in the reference frame
-        self.used_pc_count = 0
+        self.used_pc_count = 0 # 要用的点云文件个数
         begin_flag = False
         self.begin_pose_inv = np.eye(4)
         for frame_id in range(self.total_pc_count):
@@ -78,12 +79,16 @@ class LiDARDataset(Dataset):
                 continue
             if not begin_flag:  # the first frame used
                 begin_flag = True
+                # 设置参考的坐标，要么参考第一帧，要么参考世界坐标（即使用文件里存的原始坐标）
+                # 前者计算第一帧坐标的逆矩阵，后者直接用单位矩阵（下面的global_shift_default还是TO FIX状态，值是0，所以相当于没赋值）
+                # 然后用得到的矩阵对每个pose做变换，最后得到poses_ref，也即所谓“参考的坐标”
                 if config.first_frame_ref:
                     self.begin_pose_inv = inv(self.poses_w[frame_id])  # T_rw
                 else:
                     # just a random number to avoid octree boudnary marching cubes problems on synthetic dataset such as MaiCity(TO FIX)
                     self.begin_pose_inv[2,3] += config.global_shift_default 
             # use the first frame as the reference (identity)
+            # 
             self.poses_ref[frame_id] = np.matmul(
                 self.begin_pose_inv, self.poses_w[frame_id]
             )
@@ -91,6 +96,7 @@ class LiDARDataset(Dataset):
         # or we directly use the world frame as reference
 
         # to cope with the gpu memory issue (use cpu memory for the data pool, a bit slower for moving between cpu and gpu)
+        # 如果需要用的点云个数大于pc_count_gpu_limit，并且用的是replay不是reg方式，那就把数据存储在cpu memory上，会比在gpu上慢（需要来回切换）
         if self.used_pc_count > config.pc_count_gpu_limit and not config.continual_learning_reg:
             self.pool_device = "cpu"
             self.to_cpu = True
@@ -112,6 +118,7 @@ class LiDARDataset(Dataset):
         self.origin_pool = torch.empty((0, 3), device=self.pool_device, dtype=self.dtype)
         self.time_pool = torch.empty((0), device=self.pool_device, dtype=self.dtype)
 
+    # 读取新的一帧点云并预处理，对这一帧点云进行采样得到采样点，更新octree，更新data pool
     def process_frame(self, frame_id, incremental_on = False):
 
         pc_radius = self.config.pc_radius
@@ -136,6 +143,10 @@ class LiDARDataset(Dataset):
             frame_pc = self.read_semantic_point_label(frame_filename, label_filename)
 
         # block filter: crop the point clouds into a cube
+        # 根据设置的bbx对当前读取的一帧点云进行crop。注意这里bbx的中心在坐标系的原点处（z轴不一定，因为z轴max和min值不一样）,
+        # 所以这个bbx是对“当前雷达扫描到的一帧点云”的范围进行限制，而不是对全局点云地图做了限制，
+        # 并且假如pc_radius的值是默认的20m，那么相当于过滤了手持雷达的人的周围边长20m方形区域外的点
+        # 所以如果点云自身带有pose，则点云不再以坐标系原点为中心，但是bbx中心还在原点，那么这个crop过程就出错了，之后的点云需要不带有pose
         bbx_min = np.array([-pc_radius, -pc_radius, min_z])
         bbx_max = np.array([pc_radius, pc_radius, max_z])
         bbx = o3d.geometry.AxisAlignedBoundingBox(bbx_min, bbx_max)
@@ -172,6 +183,7 @@ class LiDARDataset(Dataset):
             frame_sem_rgb = np.asarray(frame_sem_rgb, dtype=np.float64)/255.0
             frame_pc.colors = o3d.utility.Vector3dVector(frame_sem_rgb)
         
+        # 乘以scale归一化到[-1,1]区间，只需要对平移部分乘就行
         frame_origin = self.cur_pose_ref[:3, 3] * self.config.scale  # translation part
         frame_origin_torch = torch.tensor(frame_origin, dtype=self.dtype, device=self.pool_device)
 
@@ -180,8 +192,8 @@ class LiDARDataset(Dataset):
         # make a backup for merging into the map point cloud
         frame_pc_clone = copy.deepcopy(frame_pc)
         frame_pc_clone = frame_pc_clone.voxel_down_sample(voxel_size=self.config.map_vox_down_m) # for smaller memory cost
-        self.map_down_pc += frame_pc_clone
-        self.cur_frame_pc = frame_pc_clone
+        self.map_down_pc += frame_pc_clone # 把transform后的点云和全局地图合并在一起
+        self.cur_frame_pc = frame_pc_clone # sine_incre里面用这个update vis
 
         self.map_bbx = self.map_down_pc.get_axis_aligned_bounding_box()
         self.cur_bbx = self.cur_frame_pc.get_axis_aligned_bounding_box()
@@ -201,8 +213,8 @@ class LiDARDataset(Dataset):
         # print("Frame point cloud count:", frame_pc_s_torch.shape[0])
 
         # sampling the points
-        # coord: 所有采样点坐标; sdf_label: 所有采样点sdf真值; weight: 所有采样点的类型，包括surface和free; 
-        # sample_depth: 所有采样点的深度; ray_depth: 输入的点云中所有点的深度
+        # coord: 所有采样点坐标(scale后的); sdf_label: 所有采样点sdf真值(有正负之分)(scale后的); weight: 所有采样点的类型正的是surface，负的是free; 
+        # sample_depth: 所有采样点的真实深度(不是scale后的); ray_depth: 当前帧点云中所有点的真实深度
         (coord, sdf_label, normal_label, sem_label, weight, sample_depth, ray_depth) = \
             self.sampler.sample(frame_pc_s_torch, frame_origin_torch, \
             frame_normal_torch, frame_label_torch)
@@ -213,10 +225,13 @@ class LiDARDataset(Dataset):
         # update feature octree
         if self.octree is not None:
             if self.config.octree_from_surface_samples:
-                # 不是根据读取的点云来增加octree，而是根据sample的点来增加octree
+                # 如果设置了octree_from_surface_samples，也就是用surface类型采样点来更新octree，就传递surface类型的采样点到update里，
+                # 并且注意这里的coord是scale后的坐标
                 # update with the sampled surface points
                 self.octree.update(coord[weight > 0, :].to(self.device), incremental_on)
             else:
+                # 否则使用当前帧点云来更新octree，区别在于使用采样点更新的时候memory占用显然会更大，但是更robust
+                # 并且这里的点云坐标也是scale后的坐标
                 # update with the original points
                 self.octree.update(frame_pc_s_torch.to(self.device), incremental_on)  
 
@@ -336,6 +351,7 @@ class LiDARDataset(Dataset):
 
     def preprocess_kitti(self, points, z_th=-3.0, min_range=2.5):
         # filter the outliers
+        # 去掉z轴值小于z_th的点，以及和原点间距离小于min_range的点
         z = points[:, 2]
         points = points[z > z_th]
         points = points[np.linalg.norm(points, axis=1) >= min_range]
@@ -412,6 +428,10 @@ class LiDARDataset(Dataset):
                  dtype=int, device=self.device).reshape(-1, 1)
             index = sample_index.transpose(0,1).reshape(-1)
 
+            # ray_loss控制使用depth估计和可微分渲染，都需要ray sample，也就是按照ray进行采样，
+            # 也即把这一帧点云里每个点看成一个ray，由于前面process_frame的时候已经在每个点云点的ray上采样了六个sample点，
+            # 所以ray sample的每次采样都要把这六个点都包含进去
+            # 没看懂上面过程的话可以设个值试一下
             coord = self.coord_pool[index, :].to(self.device)
             weight = self.weight_pool[index].to(self.device)
             sample_depth = self.sample_depth_pool[index].to(self.device)
@@ -431,6 +451,9 @@ class LiDARDataset(Dataset):
             return coord, sample_depth, ray_depth, normal_label, sem_label, weight
         
         else: # use point sample
+            # 在不用ray_loss的情况下，只使用sdf loss，那计算loss的方法就不再以ray为单位，而是以sample point为单位，
+            # 所以直接随机batch size个范围是[0, sample points个数)的index就行
+            # 也即采样单位不是ray，而是sample points，因为每个sample point都能单独计算sdf loss，而深度估计和可微渲染都需要一条ray上完整六个采样点才能算loss
             train_sample_count = self.sdf_label_pool.shape[0]
             index = torch.randint(0, train_sample_count, (self.config.bs,), device=self.pool_device)
             coord = self.coord_pool[index, :].to(self.device)

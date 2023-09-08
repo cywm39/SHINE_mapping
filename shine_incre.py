@@ -106,11 +106,13 @@ def run_shine_mapping_incremental():
         dataset.process_frame(frame_id, incremental_on=config.continual_learning_reg or local_data_only)
         
         octree_feat = list(octree.parameters())
+        # 每帧都会设置一次optimizer，原因是每帧都会更新octree
         opt = setup_optimizer(config, octree_feat, geo_mlp_param, sem_mlp_param, sigma_size)
         octree.print_detail()
 
         T1 = get_time()
 
+        # get_batch随机选择batch，输入octree得到feature，输入mlp得到sdf，和通过了sigmoid的label计算loss，再加点其他loss，backward和step
         for iter in tqdm(range(config.iters)):
             # load batch data (avoid using dataloader because the data are already in gpu, memory vs speed)
 
@@ -121,9 +123,11 @@ def run_shine_mapping_incremental():
                 coord.requires_grad_(True)
 
             # interpolate and concat the hierachical grid features
+            # 这里已经concat了各个level上的feature
             feature = octree.query_feature(coord)
             
             # predict the scaled sdf with the feature
+            # 输入的feature维度是(n, 8)，返回的sdf_pred维度是(n, 1)
             sdf_pred = geo_mlp.sdf(feature)
             if config.semantic_on:
                 sem_pred = sem_mlp.sem_label_prob(feature)
@@ -132,6 +136,8 @@ def run_shine_mapping_incremental():
             surface_mask = weight > 0
 
             if require_gradient:
+                # g在下面求eikonal_loss和consistency_loss的时候用到了，前者的公式里需要的就是网络输出对输入点坐标的偏导，所以这里的inputs才设置成coord
+                # 一般用到torch.autograd.grad的时候inputs都指定成模型参数的
                 g = get_gradient(coord, sdf_pred)*sigma_sigmoid
 
             if config.consistency_loss_on:
@@ -190,6 +196,8 @@ def run_shine_mapping_incremental():
         # calculate the importance of each octree feature
         if config.continual_learning_reg:
             opt.zero_grad(set_to_none=True)
+            # TODO 这个计算importance的过程没太看懂，这个是用来更新octree的importance_weight的，这个importance_weight只有在cal_regularization
+            # 算regularization loss的时候用到了
             cal_feature_importance(dataset, octree, geo_mlp, sigma_sigmoid, config.bs, \
                 config.cal_importance_weight_down_rate, config.loss_reduction)
 

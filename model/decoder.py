@@ -81,6 +81,7 @@ class Decoder(nn.Module):
         return out
 
     # predict the occupancy probability
+    # TODO 这里的occupancy概率就是体密度吗？为什么给sdf值加一个sigmoid就是occupancy?
     def occupancy(self, sum_features):
         out = torch.sigmoid(self.sdf(sum_features))  # to [0, 1]
         return out

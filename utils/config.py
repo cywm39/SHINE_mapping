@@ -85,11 +85,11 @@ class SHINEConfig:
 
         # sampler
         # spilt into 3 parts for sampling
-        self.surface_sample_range_m: float = 0.5 # 
+        self.surface_sample_range_m: float = 0.5 # 表示点云中的点附近多少m范围内算“物体表面”，决定close to sorface sample
         self.surface_sample_n: int = 5
         self.free_sample_begin_ratio: float = 0.3
         # self.free_sample_end_ratio: float = 1.0 # deprecated
-        self.free_sample_end_dist_m: float = 0.5 # maximum distance after the surface (unit: m)
+        self.free_sample_end_dist_m: float = 0.5 # maximum distance after the surface (unit: m) 决定free sample
         self.free_sample_n: int = 2
         self.clearance_dist_m: float = 0.3
         self.clearance_sample_n: int = 0
@@ -125,6 +125,7 @@ class SHINEConfig:
         self.freeze_after_frame: int = 20  # For incremental mode only, if the decoder model is not loaded , it would be trained and freezed after such frame number
 
         # loss
+        # 根据描述来看ray_loss似乎是只要打开了就可以加入depth估计loss和可微分渲染loss
         self.ray_loss: bool = False  # one loss on a whole ray (including depth estimation loss or the differentiable rendering loss)
         # the main loss type, select from the sample sdf loss ('sdf_bce', 'sdf_l1', 'sdf_l2') and the ray rendering loss ('dr', 'dr_neus')
         self.main_loss_type: str = 'sdf_bce'
@@ -165,7 +166,7 @@ class SHINEConfig:
         self.iters: int = 200
         self.opt_adam: bool = True  # use adam or sgd
         self.bs: int = 4096
-        self.lr: float = 1e-3
+        self.lr: float = 1e-3 # optimizer的初始lr
         self.weight_decay: float = 0
         self.adam_eps: float = 1e-15
         self.lr_level_reduce_ratio: float = 1.0
@@ -201,7 +202,7 @@ class SHINEConfig:
 
         # initialization
         self.scale: float = 1.0
-        self.world_size: float = 1.0
+        self.world_size: float = 1.0 # 整个octree的边长
 
     def load(self, config_file):
         config_args = yaml.safe_load(open(os.path.abspath(config_file)))
@@ -369,6 +370,10 @@ class SHINEConfig:
             self.window_radius = self.pc_radius * 2.0
     
     # calculate the scale for compressing the world into a [-1,1] kaolin cube
+    # 计算整个octree的边长和scale，scale用来把坐标归一化到[-1,1]区间里
+    # TODO 这里scale的使用存在问题：octree可以想象成一个大立方体，world_size是整个octree的一条边边长，假设octree在x轴上一半是正的一半是负的，
+    # 那么octree里点的取值范围就是[-world_size/2, world_size/2]，乘以这里的scale以后取值范围就会变成[-1/2, 1/2]，而不是[-1,1]，
+    # 要么是我理解有问题，要么是点的坐标就算归一化到[-1/2,1/2]也无所谓
     def calculate_world_scale(self):
         self.world_size = self.leaf_vox_size*(2**(self.tree_level_world-1)) 
         self.scale = 1.0 / self.world_size

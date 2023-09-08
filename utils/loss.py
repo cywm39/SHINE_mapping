@@ -19,6 +19,7 @@ def sdf_bce_loss(pred, label, sigma, weight, weighted=False, bce_reduction = "me
         loss_bce = nn.BCEWithLogitsLoss(reduction=bce_reduction, weight=weight)
     else:
         loss_bce = nn.BCEWithLogitsLoss(reduction=bce_reduction)
+    # TODO 论文中说到网络输出的预测值和真值都会先输入sigmoid函数来计算loss，那这里为什么只对真值输入了sigmoid函数？预测值直接使用模型输出的sdf就计算loss了？
     label_op = torch.sigmoid(label / sigma)  # occupancy prob
     loss = loss_bce(pred, label_op)
     return loss
