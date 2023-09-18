@@ -17,7 +17,7 @@ from utils.mesher import Mesher
 from utils.visualizer import MapVisualizer, random_color_table
 from model.feature_octree import FeatureOctree
 from model.decoder import Decoder
-from dataset.lidar_dataset import LiDARDataset
+from dataset.input_dataset import InputDataset
 
 
 def run_shine_mapping_batch():
@@ -159,11 +159,16 @@ def run_shine_mapping_batch():
 
         cur_loss = 0.
         # calculate the loss
-        if config.ray_loss: # neural rendering loss       
+        if config.ray_loss: # neural rendering loss 
+            # pred维度: (4096*6, 1)      
+            # 给sdf值加一个sigmoid就是occupancy(the alpha in volume rendering), 参考decoder.py occupancy()
             pred_occ = torch.sigmoid(pred/sigma_size) # as occ. prob.
+            # pred_ray维度: (4096, 6)
             pred_ray = pred_occ.reshape(config.bs, -1)
+            # sample_depth reshape后维度: (4096, 6)
             sample_depth = sample_depth.reshape(config.bs, -1)
             if config.main_loss_type == "dr":
+                # ray_depth维度: (4096, 1)
                 dr_loss = batch_ray_rendering_loss(sample_depth, pred_ray, ray_depth, neus_on=False)
             elif config.main_loss_type == "dr_neus":
                 dr_loss = batch_ray_rendering_loss(sample_depth, pred_ray, ray_depth, neus_on=True)

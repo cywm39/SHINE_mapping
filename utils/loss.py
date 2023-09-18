@@ -117,3 +117,48 @@ def batch_ray_rendering_loss(x, y, d_meas, neus_on=True):  # for all rays in a b
     d_error_mean = torch.mean(d_error)
 
     return d_error_mean
+
+
+def color_depth_rendering_loss(sample_depth, pred_occ, depth_label, pred_color, color_label, neus_on=True):  # for all rays in a batch
+    # sample_depth as depth of sample points[ray number * sample number]
+    # pred_occ as prediction occupancy (the alpha in volume rendering), which is computed by sigmoid of pred_sdf [ray number * sample number]
+    # depth_label as measured ray depth [ray number]
+    # pred_color as prediction color [ray number, sample number, 3]
+    # color_label as measured ray color [ray number, 3]
+    # neus_on determine if using the loss defined in NEUS
+
+    # print(x.shape, y.shape, d_meas.shape, w.shape)
+
+    sort_sample_depth, indices = torch.sort(sample_depth, 1)  # for each row
+    sort_occ = torch.gather(pred_occ, 1, indices)  # for each row
+    sort_color = torch.gather(pred_color, 1, indices)
+
+    if neus_on:
+        neus_alpha = (sort_occ[:, 1:] - sort_occ[:, 0:-1]) / ( 1. - sort_occ[:, 0:-1] + 1e-10)
+        # avoid dividing by 0 (nan)
+        # print(neus_alpha)
+        alpha = torch.clamp(neus_alpha, min=0.0, max=1.0)
+    else:
+        alpha = sort_occ
+
+    # from alpha compute weight
+    one_minus_alpha = torch.ones_like(alpha) - alpha + 1e-10
+    cum_mat = torch.cumprod(one_minus_alpha, 1)
+    weights = cum_mat / one_minus_alpha * alpha
+
+    # depth error
+    weights_depth = weights * sort_sample_depth[:, 0 : alpha.shape[1]]
+    depth_render = torch.sum(weights_depth, 1)
+    d_error = torch.abs(depth_render - depth_label)
+    d_error_mean = torch.mean(d_error)
+
+    # color error
+    weights_color = weights * sort_color[:, 0 : alpha.shape[1], :]
+    # TODO 这里可能不需要squeeze(1)
+    color_render = torch.sum(weights_color, 1).squeeze(1)
+    c_error = torch.abs(color_render - color_label)
+    c_error_mean = torch.mean(c_error)
+
+    total_error = d_error_mean + c_error_mean
+
+    return total_error

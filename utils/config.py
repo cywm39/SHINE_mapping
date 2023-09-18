@@ -8,13 +8,22 @@ class SHINEConfig:
 
         # Default values
 
+        # camera
+        self.H: int = 0
+        self.W: int = 0
+        self.fx: float = 0
+        self.fy: float = 0
+        self.cx: float = 0
+        self.cy: float = 0
+
         # settings
         self.name: str = "dummy"  # experiment name
 
         self.output_root: str = ""  # output root folder
         self.pc_path: str = ""  # input point cloud folder
+        self.image_path: str = "" # input image folder
         self.pose_path: str = ""  # input pose file
-        self.calib_path: str = ""  # input calib file (to sensor frame)
+        self.calib_path: str = ""  # input calib file (to sensor frame) 原本shine mapping只有雷达，所以我不知道这个calib是标定谁和谁的
 
         self.label_path: str = "" # input point-wise label path, for semantic shine mapping
 

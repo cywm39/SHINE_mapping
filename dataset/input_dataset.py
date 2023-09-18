@@ -8,6 +8,7 @@ import torch
 from torch.utils.data import Dataset
 import open3d as o3d
 from natsort import natsorted 
+import imageio
 
 from utils.config import SHINEConfig
 from utils.tools import get_time
@@ -19,7 +20,7 @@ from model.feature_octree import FeatureOctree
 
 # better to write a new dataloader for RGB-D inputs, not always converting them to KITTI Lidar format
 
-class LiDARDataset(Dataset):
+class InputDataset(Dataset):
     def __init__(self, config: SHINEConfig, octree: FeatureOctree = None) -> None:
 
         super().__init__()
@@ -28,6 +29,10 @@ class LiDARDataset(Dataset):
         self.dtype = config.dtype
         torch.set_default_dtype(self.dtype)
         self.device = config.device
+
+        # TODO 相机外参矩阵，相机到雷达的变换矩阵，需要写一个读取的函数
+        self.camera2lidar_matrix
+        self.lidar2camera_matrix = np.linalg.inv(self.camera2lidar_matrix)
 
         self.calib = {}
         if config.calib_path != '':
@@ -49,6 +54,14 @@ class LiDARDataset(Dataset):
         # point cloud files
         self.pc_filenames = natsorted(os.listdir(config.pc_path)) # sort files as 1, 2,… 9, 10 not 1, 10, 100 with natsort
         self.total_pc_count = len(self.pc_filenames) # 文件夹下面总共的点云文件个数
+
+        # image files
+        self.image_filenames = natsorted(os.listdir(config.image_path))
+        self.total_image_count = len(self.image_filenames)
+        if not self.total_image_count == self.total_pc_count:
+            sys.exit(
+                "Image files count is not equal with point cloud files count."
+            )
 
         # feature octree
         self.octree = octree
@@ -117,6 +130,7 @@ class LiDARDataset(Dataset):
         self.ray_depth_pool = torch.empty((0), device=self.pool_device, dtype=self.dtype)
         self.origin_pool = torch.empty((0, 3), device=self.pool_device, dtype=self.dtype)
         self.time_pool = torch.empty((0), device=self.pool_device, dtype=self.dtype)
+        self.image_pool = None
 
     # 读取新的一帧点云并预处理，对这一帧点云进行采样得到采样点，更新octree，更新data pool
     def process_frame(self, frame_id, incremental_on = False):
@@ -137,10 +151,15 @@ class LiDARDataset(Dataset):
         frame_filename = os.path.join(self.config.pc_path, self.pc_filenames[frame_id])
         
         if not self.config.semantic_on:
+            # 读取的frame_pc不带有位姿，此时点云坐标在雷达坐标系下面
             frame_pc = self.read_point_cloud(frame_filename)
         else:
             label_filename = os.path.join(self.config.label_path, self.pc_filenames[frame_id].replace('bin','label'))
             frame_pc = self.read_semantic_point_label(frame_filename, label_filename)
+
+        # load image
+        image_filename = os.path.join(self.config.image_path, self.image_filenames[frame_id])
+        frame_image = imageio.imread(image_filename)
 
         # block filter: crop the point clouds into a cube
         # 根据设置的bbx对当前读取的一帧点云进行crop。注意这里bbx的中心在坐标系的原点处（z轴不一定，因为z轴max和min值不一样）,
@@ -183,9 +202,16 @@ class LiDARDataset(Dataset):
             frame_sem_rgb = np.asarray(frame_sem_rgb, dtype=np.float64)/255.0
             frame_pc.colors = o3d.utility.Vector3dVector(frame_sem_rgb)
         
+        # 去掉不能映射到相机图片中的点
+        frame_pc = self.filter_pc(frame_pc)
+
         # 乘以scale归一化到[-1,1]区间，只需要对平移部分乘就行
         frame_origin = self.cur_pose_ref[:3, 3] * self.config.scale  # translation part
         frame_origin_torch = torch.tensor(frame_origin, dtype=self.dtype, device=self.pool_device)
+
+        cur_camera_pose_ref = self.lidar2camera_matrix * self.cur_pose_ref
+        camera_origin = cur_camera_pose_ref[:3, 3] * self.config.scale
+        camera_origin_torch = torch.tensor(camera_origin, dtype=self.dtype, device=self.pool_device)
 
         # transform to reference frame 
         frame_pc = frame_pc.transform(self.cur_pose_ref)
@@ -212,11 +238,17 @@ class LiDARDataset(Dataset):
 
         # print("Frame point cloud count:", frame_pc_s_torch.shape[0])
 
+        # 经过transform(self.cur_pose_ref)之后点云坐标从雷达坐标系移动到世界坐标系，scale之后就是[-1,1]范围内的世界坐标系下的点云
+        # sample函数内frame_pc_s_torch会根据frame_origin_torch平移，在scale后的世界坐标系下移动到以雷达中心为参考点
+        # 为了sample里面计算distances的时候计算的是到相机的距离而不是到雷达的距离
+        # 传递的第二个参数改成camera_origin_torch，计算自相机pose的平移部分，这样sample内的点云平移时就会移动到以scale后的相机为参考点
+        # 采样的点就会在点云点和相机的连线上
+
         # sampling the points
         # coord: 所有采样点坐标(scale后的); sdf_label: 所有采样点sdf真值(有正负之分)(scale后的); weight: 所有采样点的类型正的是surface，负的是free; 
         # sample_depth: 所有采样点的真实深度(不是scale后的); ray_depth: 当前帧点云中所有点的真实深度
         (coord, sdf_label, normal_label, sem_label, weight, sample_depth, ray_depth) = \
-            self.sampler.sample(frame_pc_s_torch, frame_origin_torch, \
+            self.sampler.sample(frame_pc_s_torch, camera_origin_torch, \
             frame_normal_torch, frame_label_torch)
         
         origin_repeat = frame_origin_torch.repeat(coord.shape[0], 1)
@@ -236,7 +268,7 @@ class LiDARDataset(Dataset):
                 self.octree.update(frame_pc_s_torch.to(self.device), incremental_on)  
 
         # get the data pool ready for training
-        
+        # TODO camera_origin_torch用不用保存，以及和origin_pool之间关系
         # ray-wise samples order
         if incremental_on: # for the incremental mapping with feature update regularization
             self.coord_pool = coord
@@ -249,6 +281,8 @@ class LiDARDataset(Dataset):
             self.ray_depth_pool = ray_depth
             self.origin_pool = origin_repeat
             self.time_pool = time_repeat
+            self.image_pool = frame_image
+            # 两种提供rgb真值的方案：一种是把所有点云点要映射到的图片像素点存起来，get batch的时候查询；一种是get_batch的时候现场计算随机到的点云点会映射到哪些像素点
         
         else: # batch processing    
             # using a sliding window for the data pool
@@ -432,6 +466,8 @@ class LiDARDataset(Dataset):
             # 也即把这一帧点云里每个点看成一个ray，由于前面process_frame的时候已经在每个点云点的ray上采样了六个sample点，
             # 所以ray sample的每次采样都要把这六个点都包含进去
             # 没看懂上面过程的话可以设个值试一下
+            # 上面的ray_index是采样了4096(假设bs是4096)个点云点，假设ray_sample_count是6(surface 3+ free 3)，
+            # 那么这里的coord的维度显然是(4096*6, 3)
             coord = self.coord_pool[index, :].to(self.device)
             weight = self.weight_pool[index].to(self.device)
             sample_depth = self.sample_depth_pool[index].to(self.device)
@@ -475,4 +511,57 @@ class LiDARDataset(Dataset):
 
             return coord, sdf_label, origin, ts, normal_label, sem_label, weight
 
+    def filter_pc(self, frame_pc):
+        """
+        将新帧点云映射到图像uv坐标系内, 并删除映射后在图像外的点
+
+        Args:
+            frame_pc: 新一帧点云，不带位姿，因此是雷达坐标系下的
+
+        Returns:
+            将映射到uv坐标系后位于图像外的点删除后的点云
+        """
+        # 得到grid中每个点的坐标
+        H, W, fx, fy, cx, cy, = self.config.H, self.config.W, self.config.fx, self.config.fy, self.config.cx, self.config.cy
+
+        points = frame_pc.clone()
+        # 输入的frame_pc是不带有位姿的，所以省略了去掉位姿即移动回相机坐标系的步骤
+        # points_bak = frame_pc.clone()
+        # c2w = c2w.cpu().numpy()
+        # w2c = np.linalg.inv(c2w)
+        # ones = np.ones_like(frame_pc[:, 0]).reshape(-1, 1)
+        # homo_vertices = np.concatenate(
+        #     [frame_pc, ones], axis=1).reshape(-1, 4, 1)
+        # cam_cord_homo = w2c@homo_vertices
+        # cam_cord = cam_cord_homo[:, :3]
+
+        # TODO 把lidar坐标系下的点坐标points用标定矩阵移动到相机坐标系下面
+        
+        K = np.array([[fx, .0, cx], [.0, fy, cy], [.0, .0, 1.0]]).reshape(3, 3)
+        points[:, 0] *= -1
+        uv = K@points
+        z = uv[:, -1:]+1e-5
+        uv = uv[:, :2]/z
+        uv = uv.astype(np.float32)
+
+        # 利用remap函数得到深度图中每个上面得到的uv坐标处的深度值
+        # remap_chunk = int(3e4)
+        # depths = []
+        # for i in range(0, uv.shape[0], remap_chunk):
+        #     depths += [cv2.remap(depth_np,
+        #                          uv[i:i+remap_chunk, 0],
+        #                          uv[i:i+remap_chunk, 1],
+        #                          interpolation=cv2.INTER_LINEAR)[:, 0].reshape(-1, 1)]
+        # depths = np.concatenate(depths, axis=0)
+
+        # 第一个筛选条件：筛选变到uv坐标后仍在相机H W范围内的grid点
+        edge = 0
+        mask = (uv[:, 0] < W-edge)*(uv[:, 0] > edge) * \
+            (uv[:, 1] < H-edge)*(uv[:, 1] > edge)
+
+        mask = mask.reshape(-1)
+
+        frame_pc = frame_pc[mask]
+        # TODO mask之后frame_pc的维度问题
+        return frame_pc
 

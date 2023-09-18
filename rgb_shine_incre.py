@@ -1,3 +1,6 @@
+"""
+author: cy
+"""
 import sys
 import numpy as np
 from numpy.linalg import inv, norm
@@ -17,6 +20,7 @@ from utils.mesher import Mesher
 from utils.visualizer import MapVisualizer, random_color_table
 from model.feature_octree import FeatureOctree
 from model.decoder import Decoder
+from model.color_SDF_decoder import color_SDF_decoder
 from dataset.input_dataset import InputDataset
 
 def run_shine_mapping_incremental():
@@ -37,18 +41,15 @@ def run_shine_mapping_incremental():
     # initialize the feature octree
     octree = FeatureOctree(config)
     # initialize the mlp decoder
-    geo_mlp = Decoder(config, is_geo_encoder=True)
-    sem_mlp = Decoder(config, is_geo_encoder=False)
+
+    mlp = color_SDF_decoder(config)
 
     # Load the decoder model
     if config.load_model:
         loaded_model = torch.load(config.model_path)
-        geo_mlp.load_state_dict(loaded_model["geo_decoder"])
+        mlp.load_state_dict(loaded_model["geo_decoder"])
         print("Pretrained decoder loaded")
-        freeze_model(geo_mlp) # fixed the decoder
-        if config.semantic_on:
-            sem_mlp.load_state_dict(loaded_model["sem_decoder"])
-            freeze_model(sem_mlp) # fixed the decoder
+        freeze_model(mlp) # fixed the decoder
         if 'feature_octree' in loaded_model.keys(): # also load the feature octree  
             octree = loaded_model["feature_octree"]
             octree.print_detail()
@@ -57,7 +58,8 @@ def run_shine_mapping_incremental():
     dataset = LiDARDataset(config, octree)
 
     # mesh reconstructor
-    mesher = Mesher(config, octree, geo_mlp, sem_mlp)
+    # TODO 更新mesher里面对带颜色mesh的重建
+    mesher = Mesher(config, octree, mlp)
     mesher.global_transform = inv(dataset.begin_pose_inv)
 
     # Non-blocking visualizer
@@ -65,8 +67,7 @@ def run_shine_mapping_incremental():
         vis = MapVisualizer()
 
     # learnable parameters
-    geo_mlp_param = list(geo_mlp.parameters())
-    sem_mlp_param = list(sem_mlp.parameters())
+    mlp_param = list(mlp.parameters())
     # learnable sigma for differentiable rendering
     sigma_size = torch.nn.Parameter(torch.ones(1, device=dev)*1.0) 
     # fixed sigma for sdf prediction supervised with BCE loss
@@ -92,9 +93,7 @@ def run_shine_mapping_incremental():
 
         if processed_frame == config.freeze_after_frame: # freeze the decoder after certain frame
             print("Freeze the decoder")
-            freeze_model(geo_mlp) # fixed the decoder
-            if config.semantic_on:
-                freeze_model(sem_mlp) # fixed the decoder
+            freeze_model(mlp) # fixed the decoder
 
         T0 = get_time()
         # preprocess, sample data and update the octree
@@ -103,11 +102,12 @@ def run_shine_mapping_incremental():
 
         local_data_only = False # this one would lead to the forgetting issue
 
+        # 读取新的一帧点云并预处理，对这一帧点云进行采样得到采样点，更新octree，更新data pool
         dataset.process_frame(frame_id, incremental_on=config.continual_learning_reg or local_data_only)
         
         octree_feat = list(octree.parameters())
         # 每帧都会设置一次optimizer，原因是每帧都会更新octree
-        opt = setup_optimizer(config, octree_feat, geo_mlp_param, sem_mlp_param, sigma_size)
+        opt = setup_optimizer(config, octree_feat, mlp_param, sigma_size)
         octree.print_detail()
 
         T1 = get_time()
@@ -116,8 +116,8 @@ def run_shine_mapping_incremental():
         for iter in tqdm(range(config.iters)):
             # load batch data (avoid using dataloader because the data are already in gpu, memory vs speed)
 
-            # we do not use the ray rendering loss here for the incremental mapping
-            coord, sdf_label, _, _, _, sem_label, weight = dataset.get_batch() 
+            # 必须用ray_loss的get_batch
+            coord, sample_depth, ray_depth, normal_label, sem_label, weight = dataset.get_batch()
             
             if require_gradient:
                 coord.requires_grad_(True)
@@ -128,9 +128,7 @@ def run_shine_mapping_incremental():
             
             # predict the scaled sdf with the feature
             # 输入的feature维度是(n, 8)，返回的sdf_pred维度是(n, 1)
-            sdf_pred = geo_mlp.sdf(feature)
-            if config.semantic_on:
-                sem_pred = sem_mlp.sem_label_prob(feature)
+            sdf_pred, color_pred = mlp(feature)
 
             # calculate the loss
             surface_mask = weight > 0
@@ -140,21 +138,38 @@ def run_shine_mapping_incremental():
                 # 一般用到torch.autograd.grad的时候inputs都指定成模型参数的
                 g = get_gradient(coord, sdf_pred)*sigma_sigmoid
 
-            if config.consistency_loss_on:
-                near_index = torch.randint(0, coord.shape[0], (min(config.consistency_count,coord.shape[0]),), device=dev)
-                shift_scale = config.consistency_range * config.scale # 10 cm
-                random_shift = torch.rand_like(coord) * 2 * shift_scale - shift_scale
-                coord_near = coord + random_shift 
-                coord_near = coord_near[near_index, :] # only use a part of these coord to speed up
-                coord_near.requires_grad_(True)
-                feature_near = octree.query_feature(coord_near)
-                pred_near = geo_mlp.sdf(feature_near)
-                g_near = get_gradient(coord_near, pred_near)*sigma_sigmoid
+            # if config.consistency_loss_on:
+            #     near_index = torch.randint(0, coord.shape[0], (min(config.consistency_count,coord.shape[0]),), device=dev)
+            #     shift_scale = config.consistency_range * config.scale # 10 cm
+            #     random_shift = torch.rand_like(coord) * 2 * shift_scale - shift_scale
+            #     coord_near = coord + random_shift 
+            #     coord_near = coord_near[near_index, :] # only use a part of these coord to speed up
+            #     coord_near.requires_grad_(True)
+            #     feature_near = octree.query_feature(coord_near)
+            #     pred_near = geo_mlp.sdf(feature_near)
+            #     g_near = get_gradient(coord_near, pred_near)*sigma_sigmoid
 
             cur_loss = 0.
-            weight = torch.abs(weight) # weight's sign indicate the sample is around the surface or in the free space
-            sdf_loss = sdf_bce_loss(sdf_pred, sdf_label, sigma_sigmoid, weight, config.loss_weight_on, config.loss_reduction) 
-            cur_loss += sdf_loss
+            
+            # weight = torch.abs(weight) # weight's sign indicate the sample is around the surface or in the free space
+            # TODO 每个采样点的sdf loss，先用ray loss做实验，之后再加进去
+            # sdf_loss = sdf_bce_loss(sdf_pred, sdf_label, sigma_sigmoid, weight, config.loss_weight_on, config.loss_reduction) 
+            # cur_loss += sdf_loss
+
+            # pred维度: (4096*6, 1)      
+            # 给sdf值加一个sigmoid就是occupancy(the alpha in volume rendering), 参考decoder.py occupancy()
+            pred_occ = torch.sigmoid(sdf_pred/sigma_size) # as occ. prob.
+            # pred_ray维度: (4096, 6)
+            pred_ray = pred_occ.reshape(config.bs, -1)
+            # sample_depth reshape后维度: (4096, 6)
+            sample_depth = sample_depth.reshape(config.bs, -1)
+            color_pred = color_pred.reshape(config.bs, -1, 3)
+            if config.main_loss_type == "dr":
+                # ray_depth维度: (4096, 1)
+                dr_loss = color_depth_rendering_loss(sample_depth, pred_ray, ray_depth, color_pred, color_label, neus_on=False)
+            elif config.main_loss_type == "dr_neus":
+                dr_loss = color_depth_rendering_loss(sample_depth, pred_ray, ray_depth, color_pred, color_label, neus_on=True)
+            cur_loss += dr_loss
 
             # incremental learning regularization loss 
             reg_loss = 0.
@@ -175,12 +190,6 @@ def run_shine_mapping_incremental():
                 consistency_loss = (1.0 - F.cosine_similarity(g[near_index, :], g_near)).mean()
                 cur_loss += config.weight_c * consistency_loss
             
-            # semantic classification loss
-            sem_loss = 0.
-            if config.semantic_on:
-                loss_nll = nn.NLLLoss(reduction='mean')
-                sem_loss = loss_nll(sem_pred[::config.sem_label_decimation,:], sem_label[::config.sem_label_decimation])
-                cur_loss += config.weight_s * sem_loss
 
             opt.zero_grad(set_to_none=True)
             cur_loss.backward() # this is the slowest part (about 10x the forward time)
@@ -198,7 +207,7 @@ def run_shine_mapping_incremental():
             opt.zero_grad(set_to_none=True)
             # TODO 这个计算importance的过程没太看懂，这个是用来更新octree的importance_weight的，这个importance_weight只有在cal_regularization
             # 算regularization loss的时候用到了
-            cal_feature_importance(dataset, octree, geo_mlp, sigma_sigmoid, config.bs, \
+            cal_feature_importance(dataset, octree, mlp, sigma_sigmoid, config.bs, \
                 config.cal_importance_weight_down_rate, config.loss_reduction)
 
         T2 = get_time()

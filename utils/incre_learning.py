@@ -2,10 +2,10 @@ import math
 from tqdm import tqdm
 from model.feature_octree import FeatureOctree
 from model.decoder import Decoder
-from dataset.lidar_dataset import LiDARDataset
+from dataset.input_dataset import InputDataset
 from utils.loss import *
 
-def cal_feature_importance(data: LiDARDataset, octree: FeatureOctree, mlp: Decoder, 
+def cal_feature_importance(data: InputDataset, octree: FeatureOctree, mlp: Decoder, 
     sigma, bs, down_rate=1, loss_reduction='mean', loss_weight_on = False):
     
     # shuffle_indice = torch.randperm(data.coord_pool.shape[0])
@@ -28,9 +28,9 @@ def cal_feature_importance(data: LiDARDataset, octree: FeatureOctree, mlp: Decod
             
         octree.get_indices(batch_coord)
         features = octree.query_feature(batch_coord)
-        pred = mlp(features) # before sigmoid         
+        sdf_pred, color_pred = mlp(features) # before sigmoid         
         # add options for other losses here                              
-        sdf_loss = sdf_bce_loss(pred, batch_label, sigma, None, loss_weight_on, loss_reduction)                         
+        sdf_loss = sdf_bce_loss(sdf_pred, batch_label, sigma, None, loss_weight_on, loss_reduction)                         
         sdf_loss.backward()
 
         for i in range(len(octree.importance_weight)): # for each level

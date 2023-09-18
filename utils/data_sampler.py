@@ -89,8 +89,8 @@ class dataSampler():
         
         repeated_points = shift_points.repeat(all_sample_n,1)
         repeated_dist = distances.repeat(all_sample_n,1)
-        # 所有采样点的坐标，由于重新加上了sensor_origin_torch，所以得到的是在scale后坐标系下的带有平移和旋转的坐标
-        all_sample_points = repeated_points*all_sample_dist_ratio + sensor_origin_torch
+        # 所有采样点的坐标，由于重新加上了sensor_origin_torch，所以得到的是在scale后世界坐标系下的带有平移和旋转的坐标
+        all_sample_points = repeated_points * all_sample_dist_ratio + sensor_origin_torch
 
         # depth tensor of all the samples
         depths_tensor = repeated_dist * all_sample_dist_ratio
