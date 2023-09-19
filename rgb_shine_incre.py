@@ -55,7 +55,7 @@ def run_shine_mapping_incremental():
             octree.print_detail()
 
     # dataset
-    dataset = LiDARDataset(config, octree)
+    dataset = InputDataset(config, octree)
 
     # mesh reconstructor
     # TODO 更新mesher里面对带颜色mesh的重建
@@ -117,7 +117,7 @@ def run_shine_mapping_incremental():
             # load batch data (avoid using dataloader because the data are already in gpu, memory vs speed)
 
             # 必须用ray_loss的get_batch
-            coord, sample_depth, ray_depth, normal_label, sem_label, weight = dataset.get_batch()
+            coord, sample_depth, ray_depth, normal_label, sem_label, weight, color_label = dataset.get_batch()
             
             if require_gradient:
                 coord.requires_grad_(True)
@@ -166,10 +166,10 @@ def run_shine_mapping_incremental():
             color_pred = color_pred.reshape(config.bs, -1, 3)
             if config.main_loss_type == "dr":
                 # ray_depth维度: (4096, 1)
-                dr_loss = color_depth_rendering_loss(sample_depth, pred_ray, ray_depth, color_pred, color_label, neus_on=False)
+                cdr_loss = color_depth_rendering_loss(sample_depth, pred_ray, ray_depth, color_pred, color_label, neus_on=False)
             elif config.main_loss_type == "dr_neus":
-                dr_loss = color_depth_rendering_loss(sample_depth, pred_ray, ray_depth, color_pred, color_label, neus_on=True)
-            cur_loss += dr_loss
+                cdr_loss = color_depth_rendering_loss(sample_depth, pred_ray, ray_depth, color_pred, color_label, neus_on=True)
+            cur_loss += cdr_loss
 
             # incremental learning regularization loss 
             reg_loss = 0.

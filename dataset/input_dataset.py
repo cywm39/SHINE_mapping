@@ -123,7 +123,7 @@ class InputDataset(Dataset):
         self.coord_pool = torch.empty((0, 3), device=self.pool_device, dtype=self.dtype)
         self.sdf_label_pool = torch.empty((0), device=self.pool_device, dtype=self.dtype)
         self.normal_label_pool = torch.empty((0, 3), device=self.pool_device, dtype=self.dtype)
-        self.color_label_pool = torch.empty((0, 3), device=self.pool_device, dtype=self.dtype)
+        # self.color_label_pool = torch.empty((0, 3), device=self.pool_device, dtype=self.dtype)
         self.sem_label_pool = torch.empty((0), device=self.pool_device, dtype=torch.long)
         self.weight_pool = torch.empty((0), device=self.pool_device, dtype=self.dtype)
         self.sample_depth_pool = torch.empty((0), device=self.pool_device, dtype=self.dtype)
@@ -131,8 +131,9 @@ class InputDataset(Dataset):
         self.origin_pool = torch.empty((0, 3), device=self.pool_device, dtype=self.dtype)
         self.time_pool = torch.empty((0), device=self.pool_device, dtype=self.dtype)
         self.image_pool = None
+        self.color_label_pool = torch.empty((0, 3), device=self.pool_device, dtype=self.dtype)
 
-    # 读取新的一帧点云并预处理，对这一帧点云进行采样得到采样点，更新octree，更新data pool
+    # 读取新的一帧点云和图片并预处理，对这一帧点云进行采样得到采样点，更新octree，更新data pool
     def process_frame(self, frame_id, incremental_on = False):
 
         pc_radius = self.config.pc_radius
@@ -203,13 +204,37 @@ class InputDataset(Dataset):
             frame_pc.colors = o3d.utility.Vector3dVector(frame_sem_rgb)
         
         # 去掉不能映射到相机图片中的点
-        frame_pc = self.filter_pc(frame_pc)
+        # 将点从雷达坐标系转到相机坐标系
+        points3d_lidar = frame_pc.clone()
+        points3d_lidar = np.insert(points3d_lidar, 3, 1, axis=1)
+        points3d_camera = self.lidar2camera_matrix @ points3d_lidar.T
+        H, W, fx, fy, cx, cy, = self.config.H, self.config.W, self.config.fx, self.config.fy, self.config.cx, self.config.cy
+        K = np.array([[fx, .0, cx, .0], [.0, fy, cy, .0], [.0, .0, 1.0, .0]]).reshape(3, 4)
+        # 过滤掉相机坐标系内位于相机之后的点
+        tmp_mask = points3d_camera[2, :] > 0.0
+        points3d_camera = points3d_camera[:, tmp_mask]
+        frame_pc = frame_pc[tmp_mask]
+        # 从相机坐标系映射到uv平面坐标
+        points2d_camera = K @ points3d_camera
+        points2d_camera = (points2d_camera[:2, :] / points2d_camera[2, :]).T # 操作之后points2d_camera维度:[n, 2]
+        # 过滤掉uv平面坐标内在图像外的点
+        tmp_mask = np.logical_and(
+            (points2d_camera[:, 1] < H) & (points2d_camera[:, 1] > 0),
+            (points2d_camera[:, 0] < W) & (points2d_camera[:, 0] > 0)
+        )
+        points2d_camera = points2d_camera[tmp_mask]
+        points3d_camera = (points3d_camera.T)[tmp_mask] # 操作之后points3d_camera维度: [n, 4]
+        frame_pc = frame_pc[tmp_mask]
+        # 取出图像内uv坐标对应的颜色
+        frame_color_label = torch.tensor(frame_image[points2d_camera[:,1].astype(int), points2d_camera[:,0].astype(int)])
+        # 上面这几步旨在将frame_pc中的点映射到图片上，对应位置的像素点颜色形成一个新的pool，顺序与frame_pc中点的顺序相同
+        # 之后get_batch的时候，类似于从ray_depth_pool获取ray的深度，同样可以直接获取ray的颜色
 
         # 乘以scale归一化到[-1,1]区间，只需要对平移部分乘就行
         frame_origin = self.cur_pose_ref[:3, 3] * self.config.scale  # translation part
         frame_origin_torch = torch.tensor(frame_origin, dtype=self.dtype, device=self.pool_device)
 
-        cur_camera_pose_ref = self.lidar2camera_matrix * self.cur_pose_ref
+        cur_camera_pose_ref = self.lidar2camera_matrix @ self.cur_pose_ref
         camera_origin = cur_camera_pose_ref[:3, 3] * self.config.scale
         camera_origin_torch = torch.tensor(camera_origin, dtype=self.dtype, device=self.pool_device)
 
@@ -281,7 +306,7 @@ class InputDataset(Dataset):
             self.ray_depth_pool = ray_depth
             self.origin_pool = origin_repeat
             self.time_pool = time_repeat
-            self.image_pool = frame_image
+            self.color_label_pool = frame_color_label
             # 两种提供rgb真值的方案：一种是把所有点云点要映射到的图片像素点存起来，get batch的时候查询；一种是get_batch的时候现场计算随机到的点云点会映射到哪些像素点
         
         else: # batch processing    
@@ -483,8 +508,9 @@ class InputDataset(Dataset):
                 sem_label = None
 
             ray_depth = self.ray_depth_pool[ray_index].to(self.device)
+            color_label = self.color_label_pool[ray_index].to(self.device)
 
-            return coord, sample_depth, ray_depth, normal_label, sem_label, weight
+            return coord, sample_depth, ray_depth, normal_label, sem_label, weight, color_label
         
         else: # use point sample
             # 在不用ray_loss的情况下，只使用sdf loss，那计算loss的方法就不再以ray为单位，而是以sample point为单位，
@@ -535,10 +561,10 @@ class InputDataset(Dataset):
         # cam_cord_homo = w2c@homo_vertices
         # cam_cord = cam_cord_homo[:, :3]
 
-        # TODO 把lidar坐标系下的点坐标points用标定矩阵移动到相机坐标系下面
+        points = self.lidar2camera_matrix * points
         
         K = np.array([[fx, .0, cx], [.0, fy, cy], [.0, .0, 1.0]]).reshape(3, 3)
-        points[:, 0] *= -1
+        # points[:, 0] *= -1
         uv = K@points
         z = uv[:, -1:]+1e-5
         uv = uv[:, :2]/z
