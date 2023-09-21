@@ -15,6 +15,7 @@ class SHINEConfig:
         self.fy: float = 0
         self.cx: float = 0
         self.cy: float = 0
+        self.camera_ext_matrix: List = [] # 相机到雷达的外参矩阵
 
         # settings
         self.name: str = "dummy"  # experiment name
@@ -223,6 +224,16 @@ class SHINEConfig:
         self.pc_path = config_args["setting"]["pc_path"] 
         self.pose_path = config_args["setting"]["pose_path"]
         self.calib_path = config_args["setting"]["calib_path"]
+        self.image_path = config_args["setting"]["image_path"]
+
+        # camera
+        self.H = config_args["camera"]['image_height']
+        self.W = config_args["camera"]['image_width']
+        self.fx = config_args["camera"]["fx"]
+        self.fy = config_args["camera"]["fy"]
+        self.cx = config_args["camera"]["cx"]
+        self.cy = config_args["camera"]["cy"]
+        self.camera_ext_matrix = torch.tensor(config_args["camera"]["camera_ext_matrix"]).reshape(4, 4)
 
         # optional, when semantic shine mapping is on [semantic]
         if self.semantic_on:

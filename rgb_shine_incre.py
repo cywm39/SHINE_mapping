@@ -59,7 +59,7 @@ def run_shine_mapping_incremental():
 
     # mesh reconstructor
     # TODO 更新mesher里面对带颜色mesh的重建
-    mesher = Mesher(config, octree, mlp)
+    mesher = Mesher(config, octree, mlp, mlp)
     mesher.global_transform = inv(dataset.begin_pose_inv)
 
     # Non-blocking visualizer
@@ -107,7 +107,7 @@ def run_shine_mapping_incremental():
         
         octree_feat = list(octree.parameters())
         # 每帧都会设置一次optimizer，原因是每帧都会更新octree
-        opt = setup_optimizer(config, octree_feat, mlp_param, sigma_size)
+        opt = setup_optimizer(config, octree_feat, mlp_param, None, sigma_size)
         octree.print_detail()
 
         T1 = get_time()

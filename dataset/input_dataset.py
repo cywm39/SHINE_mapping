@@ -30,8 +30,7 @@ class InputDataset(Dataset):
         torch.set_default_dtype(self.dtype)
         self.device = config.device
 
-        # TODO 相机外参矩阵，相机到雷达的变换矩阵，需要写一个读取的函数
-        self.camera2lidar_matrix
+        self.camera2lidar_matrix = self.config.camera_ext_matrix
         self.lidar2camera_matrix = np.linalg.inv(self.camera2lidar_matrix)
 
         self.calib = {}
@@ -588,6 +587,5 @@ class InputDataset(Dataset):
         mask = mask.reshape(-1)
 
         frame_pc = frame_pc[mask]
-        # TODO mask之后frame_pc的维度问题
         return frame_pc
 
