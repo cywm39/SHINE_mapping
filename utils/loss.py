@@ -133,6 +133,7 @@ def color_depth_rendering_loss(sample_depth, pred_occ, depth_label, pred_color, 
 
     sort_sample_depth, indices = torch.sort(sample_depth, 1)  # for each row
     sort_occ = torch.gather(pred_occ, 1, indices)  # for each row
+    indices = indices.unsqueeze(2).expand(-1, -1, 3)
     sort_color = torch.gather(pred_color, 1, indices)
 
     if neus_on:

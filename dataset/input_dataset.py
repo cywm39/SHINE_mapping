@@ -222,7 +222,7 @@ class InputDataset(Dataset):
             (points2d_camera[:, 0] < W) & (points2d_camera[:, 0] > 0)
         )
         points2d_camera = points2d_camera[tmp_mask]
-        points3d_camera = (points3d_camera.T)[tmp_mask] # 操作之后points3d_camera维度: [n, 4]
+        # points3d_camera = (points3d_camera.T)[tmp_mask] # 操作之后points3d_camera维度: [n, 4]
         frame_pc = frame_pc[tmp_mask]
         # 取出图像内uv坐标对应的颜色
         frame_color_label = torch.tensor(frame_image[points2d_camera[:,1].astype(int), points2d_camera[:,0].astype(int)])
