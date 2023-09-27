@@ -1,10 +1,10 @@
 setting:
-  name: "r3live_incre_reg"
+  name: "rgb_r3live_incre_reg"
   output_root: "./experiments/"
-  pc_path: "/home/cy/NeRF/shine_mapping_input/Map_pointcloud"
+  pc_path: "/home/cy/NeRF/shine_mapping_input/Map_pointcloud_wo_pose"
   image_path: "/home/cy/NeRF/shine_mapping_input/image/rgb"
   label_path: "" # optional for semantic mapping
-  pose_path: "/home/cy/NeRF/shine_mapping_input/zero_pose.txt"
+  pose_path: "/home/cy/NeRF/shine_mapping_input/Lidar_pose_kitti.txt"
   calib_path: ""
   load_model: False
   model_path: "" 
@@ -15,8 +15,8 @@ setting:
   device: "cuda"
   gpu_id: "0"
 camera:
-  image_width: 1280
-  image_height: 1024
+  image_width: 640
+  image_height: 512
   fx: 863.4241
   fy: 863.4171
   cx: 640.6808
@@ -51,7 +51,7 @@ decoder:
   freeze_after_frame: 20
 loss:
   ray_loss: True
-  main_loss_type: sdf_bce  # select from sdf_bce (our proposed), sdf_l1, sdf_l2, dr, dr_neus
+  main_loss_type: dr  # select from sdf_bce (our proposed), sdf_l1, sdf_l2, dr, dr_neus
   sigma_sigmoid_m: 0.1  # default: 0.1
   loss_weight_on: False
   behind_dropoff_on: False
@@ -63,16 +63,16 @@ continual:
   window_replay_on: False # replay within the sliding window
   window_radius_m: 0
 optimizer:
-  iters: 50  # iterations per frame. default value is 50.
+  iters: 100  # iterations per frame. default value is 50.
   batch_size: 4096
   learning_rate: 0.01
   weight_decay: 1e-7 # l2 regularization
 eval:
   wandb_vis_on: False # log to wandb or not
-  o3d_vis_on: False # visualize the mapping or not
+  o3d_vis_on: True # visualize the mapping or not
   vis_freq_iters: 0 
   save_freq_iters: 10000 # save the model and octree every x iterations
-  mesh_freq_frame: 10000 # reconstruct the mesh every x frames
+  mesh_freq_frame: 5 # reconstruct the mesh every x frames
   mc_res_m: 0.1 # reconstruction marching cubes resolution. default: 0.1
   mc_with_octree: True # querying sdf only in certain levels of the octree
   mc_local: False

@@ -117,7 +117,7 @@ def run_shine_mapping_incremental():
             # load batch data (avoid using dataloader because the data are already in gpu, memory vs speed)
 
             # 必须用ray_loss的get_batch
-            coord, sample_depth, ray_depth, normal_label, sem_label, weight, color_label = dataset.get_batch()
+            coord, sample_depth, ray_depth, normal_label, sem_label, weight, color_label, sdf_label = dataset.get_batch_all()
             
             if require_gradient:
                 coord.requires_grad_(True)
@@ -170,6 +170,10 @@ def run_shine_mapping_incremental():
             elif config.main_loss_type == "dr_neus":
                 cdr_loss = color_depth_rendering_loss(sample_depth, pred_ray, ray_depth, color_pred, color_label, neus_on=True)
             cur_loss += cdr_loss
+
+            weight = torch.abs(weight)
+            sdf_loss = sdf_bce_loss(sdf_pred, sdf_label, sigma_sigmoid, weight, config.loss_weight_on, config.loss_reduction) 
+            cur_loss += sdf_loss
 
             # incremental learning regularization loss 
             reg_loss = 0.

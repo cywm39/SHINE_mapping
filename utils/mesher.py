@@ -204,7 +204,7 @@ class Mesher():
             # mc_mask[:,:,0:1] = True 
 
         if color_pred is not None:
-            color_pred = color_pred.reshape(voxel_num_xyz[0], voxel_num_xyz[1], voxel_num_xyz[2])
+            color_pred = color_pred.reshape(voxel_num_xyz[0], voxel_num_xyz[1], voxel_num_xyz[2], 3)
             
         return sdf_pred, sem_pred, mc_mask, color_pred
 

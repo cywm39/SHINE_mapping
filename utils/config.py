@@ -1,6 +1,7 @@
 import yaml
 import os
 import torch
+import numpy as np
 from typing import List
 
 class SHINEConfig:
@@ -233,7 +234,7 @@ class SHINEConfig:
         self.fy = config_args["camera"]["fy"]
         self.cx = config_args["camera"]["cx"]
         self.cy = config_args["camera"]["cy"]
-        self.camera_ext_matrix = torch.tensor(config_args["camera"]["camera_ext_matrix"]).reshape(4, 4)
+        self.camera_ext_matrix = np.array(config_args["camera"]["camera_ext_matrix"]).reshape(4, 4)
 
         # optional, when semantic shine mapping is on [semantic]
         if self.semantic_on:

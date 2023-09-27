@@ -156,6 +156,7 @@ def color_depth_rendering_loss(sample_depth, pred_occ, depth_label, pred_color, 
     d_error_mean = torch.mean(d_error)
 
     # color error
+    weights = weights.unsqueeze(2).expand(-1, -1, 3)
     weights_color = weights * sort_color[:, 0 : alpha.shape[1], :]
     # TODO 这里可能不需要squeeze(1)
     color_render = torch.sum(weights_color, 1).squeeze(1)
