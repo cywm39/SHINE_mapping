@@ -255,7 +255,7 @@ class InputDataset(Dataset):
         frame_color_label = torch.zeros(points2d_camera.shape[0], 3, device=self.pool_device, dtype=torch.uint8)
         frame_color_label[mask] = torch.tensor(frame_image[points2d_camera[mask,1].astype(int), points2d_camera[mask,0].astype(int)],
                                                device=self.pool_device)
-        frame_color_label[~mask] = torch.tensor([57, 197, 187], device=self.pool_device, dtype=torch.uint8)
+        frame_color_label[~mask] = torch.tensor([255, 255, 255], device=self.pool_device, dtype=torch.uint8)
 
 
         # 乘以scale归一化到[-1,1]区间，只需要对平移部分乘就行

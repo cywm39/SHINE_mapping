@@ -31,7 +31,7 @@ class Mesher():
 
         self.global_transform = np.eye(4)
     
-    def query_points(self, coord, bs, query_sdf = True, query_sem = False, query_mask = True):
+    def query_points(self, coord, bs, query_sdf = True, query_sem = False, query_mask = True, query_color = False):
         """ query the sdf value, semantic label and marching cubes mask for points
         Args:
             coord: Nx3 torch tensor, the coordinates of all N (axbxc) query points in the scaled
@@ -41,6 +41,7 @@ class Mesher():
             sdf_pred: Ndim numpy array, signed distance value (scaled) at each query point
             sem_pred: Ndim numpy array, semantic label prediction at each query point
             mc_mask:  Ndim bool numpy array, marching cubes mask at each query point
+            color_pred: [N, 3]dim numpy array, color at each query point
         """
         # the coord torch tensor is already scaled in the [-1,1] coordinate system
         sample_count = coord.shape[0]
@@ -48,10 +49,8 @@ class Mesher():
         check_level = min(self.octree.featured_level_num, self.config.mc_vis_level)-1
         if query_sdf:
             sdf_pred = np.zeros(sample_count)
-            color_pred = np.zeros((sample_count, 3))
         else: 
             sdf_pred = None
-            color_pred = None
         if query_sem:
             sem_pred = np.zeros(sample_count)
         else:
@@ -60,6 +59,10 @@ class Mesher():
             mc_mask = np.zeros(sample_count)
         else:
             mc_mask = None
+        if query_color:
+            color_pred = np.zeros((sample_count, 3))
+        else:
+            color_pred = None
         
         with torch.no_grad(): # eval step
             if iter_n > 1:
@@ -70,14 +73,16 @@ class Mesher():
                     if self.cur_device == "cpu" and self.device == "cuda":
                         batch_coord = batch_coord.cuda()
                     batch_feature = self.octree.query_feature(batch_coord, True) # query features
-                    if query_sdf:
+                    if query_sdf or query_color:
                         if not self.config.time_conditioned:
                             batch_sdf, batch_color = self.sdf_color_decoder(batch_feature)
                             batch_sdf = -batch_sdf
                         else:
                             batch_sdf = -self.sdf_color_decoder.time_conditionded_sdf(batch_feature, self.ts * torch.ones(batch_feature.shape[0], 1).cuda())
-                        sdf_pred[head:tail] = batch_sdf.detach().cpu().numpy()
-                        color_pred[head:tail] = batch_color.detach().cpu().numpy()
+                        if query_sdf:
+                            sdf_pred[head:tail] = batch_sdf.detach().cpu().numpy()
+                        if query_color:
+                            color_pred[head:tail] = batch_color.detach().cpu().numpy()
                     if query_sem:
                         batch_sem = self.sem_decoder.sem_label(batch_feature)
                         sem_pred[head:tail] = batch_sem.detach().cpu().numpy()
@@ -95,12 +100,14 @@ class Mesher():
                         # but for scimage's marching cubes, the top right corner's mask should also be true to conduct marching cubes
             else:
                 feature = self.octree.query_feature(coord, True)
-                if query_sdf:
+                if query_sdf or query_color:
                     if not self.config.time_conditioned:
                         batch_sdf, batch_color = self.sdf_color_decoder(feature)
                         batch_sdf = -batch_sdf
-                        sdf_pred = batch_sdf.detach().cpu().numpy()
-                        color_pred = batch_color.detach().cpu().numpy()
+                        if query_sdf:
+                            sdf_pred = batch_sdf.detach().cpu().numpy()
+                        if query_color:
+                            color_pred = batch_color.detach().cpu().numpy()
                     else: # just for a quick test
                         sdf_pred = -self.sdf_color_decoder.time_conditionded_sdf(feature, self.ts * torch.ones(feature.shape[0], 1).cuda()).detach().cpu().numpy()
                 if query_sem:
@@ -180,7 +187,7 @@ class Mesher():
         o3d.t.io.write_point_cloud(map_path, sdf_map_pc, print_progress=False)
         print("save the sdf map to %s" % (map_path))
     
-    def assign_to_bbx(self, sdf_pred, sem_pred, mc_mask, voxel_num_xyz, color_pred):
+    def assign_to_bbx(self, sdf_pred, sem_pred, mc_mask, voxel_num_xyz):
         """ assign the queried sdf, semantic label and marching cubes mask back to the 3D grids in the specified bounding box
         Args:
             sdf_pred: Ndim np.array
@@ -203,12 +210,12 @@ class Mesher():
             mc_mask = mc_mask.reshape(voxel_num_xyz[0], voxel_num_xyz[1], voxel_num_xyz[2]).astype(dtype=bool)
             # mc_mask[:,:,0:1] = True 
 
-        if color_pred is not None:
-            color_pred = color_pred.reshape(voxel_num_xyz[0], voxel_num_xyz[1], voxel_num_xyz[2], 3)
+        # if color_pred is not None:
+        #     color_pred = color_pred.reshape(voxel_num_xyz[0], voxel_num_xyz[1], voxel_num_xyz[2], 3)
             
-        return sdf_pred, sem_pred, mc_mask, color_pred
+        return sdf_pred, sem_pred, mc_mask
 
-    def mc_mesh(self, mc_sdf, mc_mask, voxel_size, mc_origin, mc_color):
+    def mc_mesh(self, mc_sdf, mc_mask, voxel_size, mc_origin):
         """ use the marching cubes algorithm to get mesh vertices and faces
         Args:
             mc_sdf:  a*b*c np.array, 3d grids of sign distance values
@@ -222,17 +229,17 @@ class Mesher():
         """
         print("Marching cubes ...")
         # the input are all already numpy arraies
-        verts, faces, normals, values, colors= np.zeros((0, 3)), np.zeros((0, 3)), np.zeros((0, 3)), np.zeros(0), np.zeros((0, 3))
-        try:       
+        verts, faces, normals, values = np.zeros((0, 3)), np.zeros((0, 3)), np.zeros((0, 3)), np.zeros(0)
+        try:
             verts, faces, normals, values = skimage.measure.marching_cubes(
                 mc_sdf, level=0.0, allow_degenerate=False, mask=mc_mask)
-            # 在获取的顶点上对颜色进行采样
-            colors = mc_color[verts[:, 0], verts[:, 1], verts[:, 2]]
+            # # 在获取的顶点上对颜色进行采样
+            # colors = mc_color[verts[:, 0], verts[:, 1], verts[:, 2]]
         except:
             pass
 
         verts = mc_origin + verts * voxel_size
-        return verts, faces, colors
+        return verts, faces
 
     def estimate_vertices_sem(self, mesh, verts, filter_free_space_vertices = True):
         print("predict semantic labels of the vertices")
@@ -335,23 +342,23 @@ class Mesher():
         # initialize the whole map
         query_grid_sdf = np.zeros((voxel_count_per_side[0], voxel_count_per_side[1], voxel_count_per_side[2]), dtype=np.float16) # use float16 to save memory
         query_grid_mask = np.zeros((voxel_count_per_side[0], voxel_count_per_side[1], voxel_count_per_side[2]), dtype=bool)  # mask off
-        query_grid_color = np.zeros((voxel_count_per_side[0], voxel_count_per_side[1], voxel_count_per_side[2], 3), dtype=np.float32)
+        # query_grid_color = np.zeros((voxel_count_per_side[0], voxel_count_per_side[1], voxel_count_per_side[2], 3), dtype=np.float32)
 
         for node_idx in tqdm(range(nodes_count)):
             node_coord_scaled = nodes_coord_scaled[node_idx, :]
             cur_origin = torch.tensor(node_coord_scaled - 0.5 * (node_res_scaled - mc_res_scaled), device=self.device)
             cur_coord = coord.clone()
             cur_coord += cur_origin
-            cur_sdf_pred, _, cur_mc_mask, cur_color_pred = self.query_points(cur_coord, self.config.infer_bs, True, False, self.config.mc_mask_on)
-            cur_sdf_pred, _, cur_mc_mask, cur_color_pred = self.assign_to_bbx(cur_sdf_pred, None, cur_mc_mask, node_box_size, cur_color_pred)
+            cur_sdf_pred, _, cur_mc_mask, cur_color_pred = self.query_points(cur_coord, self.config.infer_bs, True, False, self.config.mc_mask_on, False)
+            cur_sdf_pred, _, cur_mc_mask = self.assign_to_bbx(cur_sdf_pred, None, cur_mc_mask, node_box_size)
             shift_coord = (node_coord_scaled - min_nodes)/node_res_scaled
             shift_coord = (shift_coord*voxel_count_per_side_node).astype(int)
             query_grid_sdf[shift_coord[0]:shift_coord[0]+voxel_count_per_side_node, 
                            shift_coord[1]:shift_coord[1]+voxel_count_per_side_node, shift_coord[2]:shift_coord[2]+voxel_count_per_side_node] = cur_sdf_pred
             query_grid_mask[shift_coord[0]:shift_coord[0]+voxel_count_per_side_node, 
                             shift_coord[1]:shift_coord[1]+voxel_count_per_side_node, shift_coord[2]:shift_coord[2]+voxel_count_per_side_node] = cur_mc_mask
-            query_grid_color[shift_coord[0]:shift_coord[0]+voxel_count_per_side_node, 
-                             shift_coord[1]:shift_coord[1]+voxel_count_per_side_node, shift_coord[2]:shift_coord[2]+voxel_count_per_side_node, :] = cur_color_pred
+            # query_grid_color[shift_coord[0]:shift_coord[0]+voxel_count_per_side_node, 
+            #                  shift_coord[1]:shift_coord[1]+voxel_count_per_side_node, shift_coord[2]:shift_coord[2]+voxel_count_per_side_node, :] = cur_color_pred
 
         mc_voxel_size = mc_res_scaled / self.world_scale
         mc_voxel_origin = (min_nodes - 0.5 * (node_res_scaled - mc_res_scaled)) / self.world_scale
@@ -360,16 +367,24 @@ class Mesher():
         #     # query_grid_coord 
         #     self.generate_sdf_map(query_grid_coord, query_grid_sdf, query_grid_mask, map_path)
 
-        verts, faces, colors = self.mc_mesh(query_grid_sdf, query_grid_mask, mc_voxel_size, mc_voxel_origin, query_grid_color)
+        verts, faces = self.mc_mesh(query_grid_sdf, query_grid_mask, mc_voxel_size, mc_voxel_origin)
         # directly use open3d to get mesh
+
+        points = torch.tensor(verts, device=self.device)
+        sdf_pred, _, mc_mask, color_pred = self.query_points(points, self.config.infer_bs, False, False, False, True)
+        vertex_colors = color_pred
+        vertex_colors = np.clip(vertex_colors, 0, 255)
+        vertex_colors /= 255.0
+
         mesh = o3d.geometry.TriangleMesh(
             o3d.utility.Vector3dVector(verts),
             o3d.utility.Vector3iVector(faces)
         )
+        mesh.vertex_colors = o3d.utility.Vector3dVector(vertex_colors)
 
-        if colors is not None:
-            # 设置顶点颜色
-            mesh.vertex_colors = o3d.utility.Vector3dVector(colors)
+        # if colors is not None:
+        #     # 设置顶点颜色
+        #     mesh.vertex_colors = o3d.utility.Vector3dVector(colors)
 
         if estimate_sem: 
             mesh = self.estimate_vertices_sem(mesh, verts, filter_free_space_vertices)
