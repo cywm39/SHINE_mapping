@@ -237,7 +237,9 @@ class Mesher():
             # colors = mc_color[verts[:, 0], verts[:, 1], verts[:, 2]]
         except:
             pass
-
+        # 只用mc_sdf就能通过调用skimage.measure.marching_cubes得到顶点和faces坐标，考虑到mc_sdf只有每个mc voxel处的sdf值没有坐标信息，
+        # 所以这里得到的verts只是相对坐标，需要进行转换
+        # 乘以真实世界下的mc voxel边长，再加上真实世界下的origin坐标，得到的就是真实世界下mesh中所有顶点的坐标了
         verts = mc_origin + verts * voxel_size
         return verts, faces
 
@@ -315,15 +317,25 @@ class Mesher():
                           save_map = False, estimate_sem = False, estimate_normal = True, \
                           filter_isolated_mesh = True, filter_free_space_vertices = True): 
 
+        # query_level层的所有节点坐标，由于是从octree里直接得到所以是[-1,1]坐标系里的
         nodes_coord_scaled = self.octree.get_octree_nodes(query_level) # query level top-down
         nodes_count = nodes_coord_scaled.shape[0]
-        min_nodes = np.min(nodes_coord_scaled, 0)
+        min_nodes = np.min(nodes_coord_scaled, 0) # 最小和最大坐标点
         max_nodes = np.max(nodes_coord_scaled, 0)
 
+        # [-1, 1]坐标系内，query_level层的voxel size(voxel的边长)
         node_res_scaled = 2**(1-query_level) # voxel size for queried octree node in [-1,1] coordinate system
         # marching cube's voxel size should be evenly divisible by the queried octree node's size
+        # node_res_scaled / self.world_scale代表实际上的query_level层的voxel size，mc_res_m代表mc算法实际上的voxel size
+        # mc算法有一个独立的voxel grid，mc_res_m就是这个voxel grid中每个voxel的边长，是预先设置好的
+        # 所以voxel_count_per_side_node就代表八叉树中query_level层的一个voxel在一条边上能放几个mc算法设置的voxel边
+        # 由于mc_res_m是config里设置的，显然如果越小，mc算法越细致。
+        # 只要理解了mc算法有自己的独立的voxel grid，并且octree的一个voxel里有很多mc算法的voxel，就容易理解这里了
         voxel_count_per_side_node = np.ceil(node_res_scaled / self.world_scale / mc_res_m).astype(dtype=int) 
         # assign coordinates for the queried octree node
+        # x y z并不是mc算法在整个空间内要查询的坐标，而只是octree的单个voxel中要查询的坐标
+        # 例如如果voxel_count_per_side_node是8，则octree的单个voxel的每一边上，都可以放8个mc算法的voxel
+        # 并且这里的坐标是对所有octree的voxel而言的，也就是这里的坐标只是“坐标偏移”，在后面能看到还会加上octree的voxel坐标来计算真实查询坐标
         x = torch.arange(voxel_count_per_side_node, dtype=torch.int16, device=self.device)
         y = torch.arange(voxel_count_per_side_node, dtype=torch.int16, device=self.device)
         z = torch.arange(voxel_count_per_side_node, dtype=torch.int16, device=self.device)
@@ -332,18 +344,28 @@ class Mesher():
         # order: [0,0,0], [0,0,1], [0,0,2], [0,1,0], [0,1,1], [0,1,2] ...
         x, y, z = torch.meshgrid(x, y, z, indexing='ij') 
         # get the vector of all the grid point's 3D coordinates
+        # 这里的coord就是上面说的，octree的单个voxel里能容纳的所有mc算法的voxel的坐标
         coord = torch.stack((x.flatten(), y.flatten(), z.flatten())).transpose(0, 1).float() 
+        # node_res_scaled是[-1,1]坐标系里octree voxel的边长，voxel_count_per_side_node是octree voxel一条边上能容纳多少mc voxel
+        # 所以这里的mc_res_scaled就是[-1,1]坐标系里mc voxel的边长
         mc_res_scaled = node_res_scaled / voxel_count_per_side_node # voxel size for marching cubes in [-1,1] coordinate system
         # transform to [-1,1] coordinate system
+        # coord原本是[0,0,0], [0,0,1], [0,0,2]之类的，乘以[-1,1]坐标系下mc voxel的边长得到的就是[-1,1]坐标系下
+        # octree的单个voxel中所容纳的所有的mc voxel的坐标
         coord *= mc_res_scaled
 
         # the voxel count for the whole map
+        # voxel_count_per_side就是整个地图中三个方向上有多少mc voxel
         voxel_count_per_side = ((max_nodes - min_nodes)/mc_res_scaled+voxel_count_per_side_node).astype(int)
         # initialize the whole map
+        # query_grid_sdf和query_grid_mask用来存放整个地图上所有mc voxel查询得到的值
         query_grid_sdf = np.zeros((voxel_count_per_side[0], voxel_count_per_side[1], voxel_count_per_side[2]), dtype=np.float16) # use float16 to save memory
         query_grid_mask = np.zeros((voxel_count_per_side[0], voxel_count_per_side[1], voxel_count_per_side[2]), dtype=bool)  # mask off
         # query_grid_color = np.zeros((voxel_count_per_side[0], voxel_count_per_side[1], voxel_count_per_side[2], 3), dtype=np.float32)
 
+        # 基本流程是遍历octree的query_level层里所有的voxel，得到这个voxel的origin坐标，和coord相加得到该voxel里所有要查询的mc voxel的坐标
+        # 要查询的mc voxel坐标输入网络得到sdf和mask，reshape后就存到query_grid_sdf和query_grid_mask里对应的位置里
+        # (因为query_grid_sdf和query_grid_mask里放的是整个地图所有mc voxel的结果，所以当前octree voxel里mc voxel的结果肯定得找到对应位置再赋值)
         for node_idx in tqdm(range(nodes_count)):
             node_coord_scaled = nodes_coord_scaled[node_idx, :]
             cur_origin = torch.tensor(node_coord_scaled - 0.5 * (node_res_scaled - mc_res_scaled), device=self.device)
@@ -359,18 +381,24 @@ class Mesher():
                             shift_coord[1]:shift_coord[1]+voxel_count_per_side_node, shift_coord[2]:shift_coord[2]+voxel_count_per_side_node] = cur_mc_mask
             # query_grid_color[shift_coord[0]:shift_coord[0]+voxel_count_per_side_node, 
             #                  shift_coord[1]:shift_coord[1]+voxel_count_per_side_node, shift_coord[2]:shift_coord[2]+voxel_count_per_side_node, :] = cur_color_pred
-
+        
+        # mc_res_scaled是[-1, 1]坐标系中mc voxel的边长，除以world_scale就是真实世界下mc voxel的边长
+        # 其实这一步没用，因为mc_voxel_size就等于mc_res_m
         mc_voxel_size = mc_res_scaled / self.world_scale
+        # mc_voxel_origin就是真实世界下，min_nodes的origin坐标
         mc_voxel_origin = (min_nodes - 0.5 * (node_res_scaled - mc_res_scaled)) / self.world_scale
 
         # if save_map: # ignore it now, too much for the memory
         #     # query_grid_coord 
         #     self.generate_sdf_map(query_grid_coord, query_grid_sdf, query_grid_mask, map_path)
 
+        # 注意这里的verts是真实世界下mesh中所有顶点坐标
         verts, faces = self.mc_mesh(query_grid_sdf, query_grid_mask, mc_voxel_size, mc_voxel_origin)
         # directly use open3d to get mesh
-
+        
         points = torch.tensor(verts, device=self.device)
+        # octree的查询只支持[-1,1]坐标系下，所以需要对真实世界下的顶点坐标进行缩放，乘以world_scale
+        points *= self.world_scale
         sdf_pred, _, mc_mask, color_pred = self.query_points(points, self.config.infer_bs, False, False, False, True)
         vertex_colors = color_pred
         vertex_colors = np.clip(vertex_colors, 0, 255)
@@ -380,6 +408,7 @@ class Mesher():
             o3d.utility.Vector3dVector(verts),
             o3d.utility.Vector3iVector(faces)
         )
+        # 得到的颜色本身和坐标没啥关系，只是按照坐标的顺序排列的，所以可以直接给mesh赋值
         mesh.vertex_colors = o3d.utility.Vector3dVector(vertex_colors)
 
         # if colors is not None:

@@ -100,7 +100,7 @@ def run_shine_mapping_incremental():
         # if continual_learning_reg is on, we only keep the current frame's sample in the data pool,
         # otherwise we accumulate the data pool with the current frame's sample
 
-        local_data_only = False # this one would lead to the forgetting issue
+        local_data_only = True # this one would lead to the forgetting issue. default: False
 
         # 读取新的一帧点云并预处理，对这一帧点云进行采样得到采样点，更新octree，更新data pool
         dataset.process_frame(frame_id, incremental_on=config.continual_learning_reg or local_data_only)
@@ -202,8 +202,11 @@ def run_shine_mapping_incremental():
             total_iter += 1
 
             if config.wandb_vis_on:
-                wandb_log_content = {'iter': total_iter, 'loss/total_loss': cur_loss, 'loss/sdf_loss': sdf_loss, \
-                    'loss/reg_loss':reg_loss, 'loss/eikonal_loss': eikonal_loss, 'loss/consistency_loss': consistency_loss, 'loss/sem_loss': sem_loss} 
+                wandb_log_content = {
+                    'iter': total_iter, 'loss/total_loss': cur_loss, 
+                    'loss/color_depth_rendering_loss': cdr_loss, 'loss/sdf_loss': sdf_loss, \
+                    'loss/reg_loss':reg_loss, 'loss/eikonal_loss': eikonal_loss, 
+                    'loss/consistency_loss': consistency_loss} 
                 wandb.log(wandb_log_content)
         
         # calculate the importance of each octree feature

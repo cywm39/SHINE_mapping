@@ -202,38 +202,9 @@ class InputDataset(Dataset):
             frame_sem_rgb = np.asarray(frame_sem_rgb, dtype=np.float64)/255.0
             frame_pc.colors = o3d.utility.Vector3dVector(frame_sem_rgb)
         
-        # # 去掉不能映射到相机图片中的点
-        # # 将点从雷达坐标系转到相机坐标系
-        # frame_pc_points = np.asarray(frame_pc.points, dtype=np.float64)
-        # points3d_lidar = np.asarray(frame_pc.points, dtype=np.float64)
-        # # points3d_lidar = frame_pc.clone()
-        # points3d_lidar = np.insert(points3d_lidar, 3, 1, axis=1)
-        # points3d_camera = self.lidar2camera_matrix @ points3d_lidar.T
-        # H, W, fx, fy, cx, cy, = self.config.H, self.config.W, self.config.fx, self.config.fy, self.config.cx, self.config.cy
-        # K = np.array([[fx, .0, cx, .0], [.0, fy, cy, .0], [.0, .0, 1.0, .0]]).reshape(3, 4)
-        # # 过滤掉相机坐标系内位于相机之后的点
-        # tmp_mask = points3d_camera[2, :] > 0.0
-        # points3d_camera = points3d_camera[:, tmp_mask]
-        # frame_pc_points = frame_pc_points[tmp_mask]
-        # # 从相机坐标系映射到uv平面坐标
-        # points2d_camera = K @ points3d_camera
-        # points2d_camera = (points2d_camera[:2, :] / points2d_camera[2, :]).T # 操作之后points2d_camera维度:[n, 2]
-        # # 过滤掉uv平面坐标内在图像外的点
-        # tmp_mask = np.logical_and(
-        #     (points2d_camera[:, 1] < H) & (points2d_camera[:, 1] > 0),
-        #     (points2d_camera[:, 0] < W) & (points2d_camera[:, 0] > 0)
-        # )
-        # points2d_camera = points2d_camera[tmp_mask]
-        # # points3d_camera = (points3d_camera.T)[tmp_mask] # 操作之后points3d_camera维度: [n, 4]
-        # frame_pc_points = frame_pc_points[tmp_mask]
-        # # 取出图像内uv坐标对应的颜色
-        # frame_color_label = torch.tensor(frame_image[points2d_camera[:,1].astype(int), points2d_camera[:,0].astype(int)], 
-        #                                  device=self.pool_device)
-        # frame_pc.points = o3d.utility.Vector3dVector(frame_pc_points)
-        # # 上面这几步旨在将frame_pc中的点映射到图片上，对应位置的像素点颜色形成一个新的pool，顺序与frame_pc中点的顺序相同
-        # # 之后get_batch的时候，类似于从ray_depth_pool获取ray的深度，同样可以直接获取ray的颜色
-        
-
+        # 去掉不能映射到相机图片中的点
+        # 将点从雷达坐标系转到相机坐标系
+        frame_pc_points = np.asarray(frame_pc.points, dtype=np.float64)
         points3d_lidar = np.asarray(frame_pc.points, dtype=np.float64)
         # points3d_lidar = frame_pc.clone()
         points3d_lidar = np.insert(points3d_lidar, 3, 1, axis=1)
@@ -241,21 +212,51 @@ class InputDataset(Dataset):
         H, W, fx, fy, cx, cy, = self.config.H, self.config.W, self.config.fx, self.config.fy, self.config.cx, self.config.cy
         K = np.array([[fx, .0, cx, .0], [.0, fy, cy, .0], [.0, .0, 1.0, .0]]).reshape(3, 4)
         # 过滤掉相机坐标系内位于相机之后的点
-        mask_one = points3d_camera[2, :] > 0.0 #mask_one是n维的
+        tmp_mask = points3d_camera[2, :] > 0.0
+        points3d_camera = points3d_camera[:, tmp_mask]
+        frame_pc_points = frame_pc_points[tmp_mask]
         # 从相机坐标系映射到uv平面坐标
         points2d_camera = K @ points3d_camera
         points2d_camera = (points2d_camera[:2, :] / points2d_camera[2, :]).T # 操作之后points2d_camera维度:[n, 2]
         # 过滤掉uv平面坐标内在图像外的点
-        mask_two = np.logical_and(
+        # TODO points2d_camera[:, 1]是否真的对应H? 以及下面的frame_image[points2d_camera[:,1].astype(int), points2d_camera[:,0]行和列是否正确?
+        tmp_mask = np.logical_and(
             (points2d_camera[:, 1] < H) & (points2d_camera[:, 1] > 0),
             (points2d_camera[:, 0] < W) & (points2d_camera[:, 0] > 0)
-        ) # mask_two也是n维的
-        mask = mask_one & mask_two # 最后mask是n维的，也就是和points2d_camera中点的个数一样
+        )
+        points2d_camera = points2d_camera[tmp_mask]
+        # points3d_camera = (points3d_camera.T)[tmp_mask] # 操作之后points3d_camera维度: [n, 4]
+        frame_pc_points = frame_pc_points[tmp_mask]
         # 取出图像内uv坐标对应的颜色
-        frame_color_label = torch.zeros(points2d_camera.shape[0], 3, device=self.pool_device, dtype=torch.uint8)
-        frame_color_label[mask] = torch.tensor(frame_image[points2d_camera[mask,1].astype(int), points2d_camera[mask,0].astype(int)],
-                                               device=self.pool_device)
-        frame_color_label[~mask] = torch.tensor([255, 255, 255], device=self.pool_device, dtype=torch.uint8)
+        frame_color_label = torch.tensor(frame_image[points2d_camera[:,1].astype(int), points2d_camera[:,0].astype(int)], 
+                                         device=self.pool_device)
+        frame_pc.points = o3d.utility.Vector3dVector(frame_pc_points)
+        # 上面这几步旨在将frame_pc中的点映射到图片上，对应位置的像素点颜色形成一个新的pool，顺序与frame_pc中点的顺序相同
+        # 之后get_batch的时候，类似于从ray_depth_pool获取ray的深度，同样可以直接获取ray的颜色
+        
+
+        # points3d_lidar = np.asarray(frame_pc.points, dtype=np.float64)
+        # # points3d_lidar = frame_pc.clone()
+        # points3d_lidar = np.insert(points3d_lidar, 3, 1, axis=1)
+        # points3d_camera = self.lidar2camera_matrix @ points3d_lidar.T
+        # H, W, fx, fy, cx, cy, = self.config.H, self.config.W, self.config.fx, self.config.fy, self.config.cx, self.config.cy
+        # K = np.array([[fx, .0, cx, .0], [.0, fy, cy, .0], [.0, .0, 1.0, .0]]).reshape(3, 4)
+        # # 过滤掉相机坐标系内位于相机之后的点
+        # mask_one = points3d_camera[2, :] > 0.0 #mask_one是n维的
+        # # 从相机坐标系映射到uv平面坐标
+        # points2d_camera = K @ points3d_camera
+        # points2d_camera = (points2d_camera[:2, :] / points2d_camera[2, :]).T # 操作之后points2d_camera维度:[n, 2]
+        # # 过滤掉uv平面坐标内在图像外的点
+        # mask_two = np.logical_and(
+        #     (points2d_camera[:, 1] < H) & (points2d_camera[:, 1] > 0),
+        #     (points2d_camera[:, 0] < W) & (points2d_camera[:, 0] > 0)
+        # ) # mask_two也是n维的
+        # mask = mask_one & mask_two # 最后mask是n维的，也就是和points2d_camera中点的个数一样
+        # # 取出图像内uv坐标对应的颜色
+        # frame_color_label = torch.zeros(points2d_camera.shape[0], 3, device=self.pool_device, dtype=torch.uint8)
+        # frame_color_label[mask] = torch.tensor(frame_image[points2d_camera[mask,1].astype(int), points2d_camera[mask,0].astype(int)],
+        #                                        device=self.pool_device)
+        # frame_color_label[~mask] = torch.tensor([255, 255, 255], device=self.pool_device, dtype=torch.uint8)
 
 
         # 乘以scale归一化到[-1,1]区间，只需要对平移部分乘就行
