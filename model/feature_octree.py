@@ -28,20 +28,33 @@ def parallel_get_dict_values(dictionary, key_list, default=None, processes=None)
 
 class FeatureOctree(nn.Module):
 
-    def __init__(self, config: SHINEConfig):
+    def __init__(self, config: SHINEConfig, is_color: bool):
         
         super().__init__()
 
-        # [0 1 2 3 ... max_level-1 max_level], 0 level is the root, which have 8 corners.
-        self.max_level = config.tree_level_world
-        # the number of levels with feature (begin from bottom)
-        self.leaf_vox_size = config.leaf_vox_size 
-        self.featured_level_num = config.tree_level_feat 
-        self.free_level_num = self.max_level - self.featured_level_num + 1
-        self.feature_dim = config.feature_dim
-        self.feature_std = config.feature_std
-        self.polynomial_interpolation = config.poly_int_on
+        if is_color:
+            # [0 1 2 3 ... max_level-1 max_level], 0 level is the root, which have 8 corners.
+            self.max_level = config.color_tree_level_world
+            # the number of levels with feature (begin from bottom)
+            self.leaf_vox_size = config.color_leaf_vox_size 
+            self.featured_level_num = config.color_tree_level_feat 
+            self.free_level_num = self.max_level - self.featured_level_num + 1
+            self.feature_dim = config.color_feature_dim
+            self.feature_std = config.color_feature_std
+            self.polynomial_interpolation = config.color_poly_int_on
+        else:        
+            # [0 1 2 3 ... max_level-1 max_level], 0 level is the root, which have 8 corners.
+            self.max_level = config.tree_level_world
+            # the number of levels with feature (begin from bottom)
+            self.leaf_vox_size = config.leaf_vox_size 
+            self.featured_level_num = config.tree_level_feat 
+            self.free_level_num = self.max_level - self.featured_level_num + 1
+            self.feature_dim = config.feature_dim
+            self.feature_std = config.feature_std
+            self.polynomial_interpolation = config.poly_int_on
+            
         self.device = config.device
+        self.is_color = is_color
 
         # Initialize the look up tables 
         self.corners_lookup_tables = [] # from corner morton to corner index (top-down)
@@ -313,7 +326,10 @@ class FeatureOctree(nn.Module):
         return self.hierarchical_indices
 
     def print_detail(self):
-        print("Current Octomap:")
+        if self.is_color:
+            print("Current Color Octree:")
+        else:
+            print("Current SDF Octree:")
         total_vox_count = 0
         for level in range(self.featured_level_num):
             level_vox_size = self.leaf_vox_size*(2**(self.featured_level_num-1-level))

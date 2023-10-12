@@ -1,3 +1,4 @@
+import imageio
 import cv2
 import open3d as o3d
 import numpy as np
@@ -135,24 +136,32 @@ def read_point_cloud(filename: str):
 
 
 if __name__ == "__main__":
-    pc_path = "/home/cy/NeRF/shine_mapping_input/whole_map_wo_pose"
+    pc_path = "/home/cy/NeRF/r3live_data/degenerate_seq_00_PointCloud2"
     pose_file_path = "/home/cy/NeRF/shine_mapping_input/Lidar_pose_kitti.txt"
-    output_image_folder_path = "/home/cy/NeRF/shine_mapping_input/pc2image_whole_map/"
+    image_path = "/home/cy/NeRF/shine_mapping_input/image/resized_rgb"
+    output_image_folder_path = "/home/cy/NeRF/shine_mapping_input/pc2image_whole_map3/"
 
-    camera2lidar_matrix = np.array([-0.00113207, -0.0158688, 0.999873, 0,
-            -0.9999999,  -0.000486594, -0.00113994, 0,
-            0.000504622,  -0.999874,  -0.0158682, 0,
+    camera2lidar_matrix = np.array([-0.00113207, -0.0158688, 0.999873, 0.050166,
+            -0.9999999,  -0.000486594, -0.00113994, 0.0474116,
+            0.000504622,  -0.999874,  -0.0158682, -0.0312415,
             0, 0, 0, 1]).reshape(4, 4)
     lidar2camera_matrix = np.linalg.inv(camera2lidar_matrix)
+
+    H, W, fx, fy, cx, cy, = 1024, 1280, 863.4241, 863.4171, 640.6808, 518.3392
+
+    distortion_coeffs = np.array([-0.1080, 0.1050, -1.2872e-04, 5.7923e-05, -0.0222])  #k1, k2, p1, p2, k3
+    camera_matrix = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float64)
 
     calib = {}
     calib['Tr'] = np.eye(4)
     poses = read_poses_file(pose_file_path, calib)
 
     pc_filenames = natsorted(os.listdir(pc_path))
+    image_filenames = natsorted(os.listdir(image_path))
     pose_index = 0
 
     for filename in pc_filenames:
+        print(filename)
         frame_path = os.path.join(pc_path, filename)
         frame_pc = read_point_cloud(frame_path)
 
@@ -165,7 +174,7 @@ if __name__ == "__main__":
 
         # 去掉不能映射到相机图片中的点
         # 将点从雷达坐标系转到相机坐标系
-        frame_pc_points = np.asarray(frame_pc.points, dtype=np.float64)
+        # frame_pc_points = np.asarray(frame_pc.points, dtype=np.float64)
         points3d_lidar = np.asarray(frame_pc.points, dtype=np.float64)
         # points3d_lidar = frame_pc.clone()
         points3d_lidar = np.insert(points3d_lidar, 3, 1, axis=1)
@@ -175,27 +184,38 @@ if __name__ == "__main__":
         # 过滤掉相机坐标系内位于相机之后的点
         tmp_mask = points3d_camera[2, :] > 0.0
         points3d_camera = points3d_camera[:, tmp_mask]
-        frame_pc_points = frame_pc_points[tmp_mask]
+        # frame_pc_points = frame_pc_points[tmp_mask]
         # 从相机坐标系映射到uv平面坐标
         points2d_camera = K @ points3d_camera
         points2d_camera = (points2d_camera[:2, :] / points2d_camera[2, :]).T # 操作之后points2d_camera维度:[n, 2]
         # 过滤掉uv平面坐标内在图像外的点
+        # TODO H change with W
         tmp_mask = np.logical_and(
             (points2d_camera[:, 1] < H) & (points2d_camera[:, 1] > 0),
             (points2d_camera[:, 0] < W) & (points2d_camera[:, 0] > 0)
         )
         points2d_camera = points2d_camera[tmp_mask]
         # points3d_camera = (points3d_camera.T)[tmp_mask] # 操作之后points3d_camera维度: [n, 4]
-        frame_pc_points = frame_pc_points[tmp_mask]
+        # frame_pc_points = frame_pc_points[tmp_mask]
         # frame_pc.points = o3d.utility.Vector3dVector(frame_pc_points)
+        image_frame_path = os.path.join(image_path, image_filenames[pose_index])
+        frame_image = cv2.imread(image_frame_path)
+        frame_image = cv2.undistort(frame_image, camera_matrix, distortion_coeffs)
 
-        black_image = np.zeros((H, W, 3), dtype=np.uint8)
-        points2d_camera = points2d_camera.astype(np.int32)
-        # 将指定坐标处的像素点调整为白色
-        for point in points2d_camera:
-            x, y = point  # 提取坐标
-            black_image[y, x] = [255, 255, 255]  # 设置像素点颜色为白色
-        cv2.imwrite(output_image_folder_path + filename + ".png", black_image)
+        white_image = np.zeros((H, W, 3), dtype=np.uint8) * 255
+
+        points_int = points2d_camera.astype(int)
+        pixel_colors = frame_image[points_int[:, 1], points_int[:, 0]]
+        white_image[points_int[:, 1], points_int[:, 0]] = pixel_colors
+        cv2.imwrite(output_image_folder_path + filename + ".png", white_image)
+
+
+        # points2d_camera = points2d_camera.astype(np.int32)
+        # # 将指定坐标处的像素点调整为白色
+        # for point in points2d_camera:
+        #     x, y = point  # 提取坐标
+        #     black_image[y, x] = [255, 255, 255]  # 设置像素点颜色为白色
+        # cv2.imwrite(output_image_folder_path + filename + ".png", black_image)
 
         # frame_pose = poses[pose_index]
         # frame_pose_inv = np.linalg.inv(frame_pose)

@@ -55,7 +55,7 @@ def setup_experiment(config: SHINEConfig):
 
 
 # 在默认的配置下，只有octree和geo_mlp被加入到optimizer中
-def setup_optimizer(config: SHINEConfig, octree_feat, mlp_geo_param, mlp_sem_param, sigma_size) -> Optimizer:
+def setup_optimizer(config: SHINEConfig, sdf_octree_feat, color_octree_feat, mlp_geo_param, mlp_sem_param, sigma_size) -> Optimizer:
     lr_cur = config.lr
     opt_setting = []
     # weight_decay is for L2 regularization, only applied to MLP
@@ -69,7 +69,14 @@ def setup_optimizer(config: SHINEConfig, octree_feat, mlp_geo_param, mlp_sem_par
     for i in range(config.tree_level_feat):
         # try to also add L2 regularization on the feature octree (results not quite good)
         # from bottom to top遍历octree中带有feature的层，最底层lr是config中设置的lr，往上每层多乘以一次lr_level_reduce_ratio
-        feat_opt_dict = {'params': octree_feat[config.tree_level_feat-i-1], 'lr': lr_cur} 
+        feat_opt_dict = {'params': sdf_octree_feat[config.tree_level_feat-i-1], 'lr': lr_cur} 
+        lr_cur *= config.lr_level_reduce_ratio
+        opt_setting.append(feat_opt_dict)
+    lr_cur = config.lr
+    for i in range(config.color_tree_level_feat):
+        # try to also add L2 regularization on the feature octree (results not quite good)
+        # from bottom to top遍历octree中带有feature的层，最底层lr是config中设置的lr，往上每层多乘以一次lr_level_reduce_ratio
+        feat_opt_dict = {'params': color_octree_feat[config.color_tree_level_feat-i-1], 'lr': lr_cur} 
         lr_cur *= config.lr_level_reduce_ratio
         opt_setting.append(feat_opt_dict)
     # make sigma also learnable for differentiable rendering (but not for our method)

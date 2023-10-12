@@ -14,12 +14,13 @@ from model.color_SDF_decoder import color_SDF_decoder
 
 class Mesher():
 
-    def __init__(self, config: SHINEConfig, octree: FeatureOctree, \
+    def __init__(self, config: SHINEConfig, sdf_octree: FeatureOctree, color_octree: FeatureOctree, \
         sdf_color_decoder: color_SDF_decoder, sem_decoder: color_SDF_decoder):
 
         self.config = config
     
-        self.octree = octree
+        self.sdf_octree = sdf_octree
+        self.color_octree = color_octree
         self.sdf_color_decoder = sdf_color_decoder
         self.sem_decoder = sem_decoder
         self.device = config.device
@@ -46,7 +47,7 @@ class Mesher():
         # the coord torch tensor is already scaled in the [-1,1] coordinate system
         sample_count = coord.shape[0]
         iter_n = math.ceil(sample_count/bs)
-        check_level = min(self.octree.featured_level_num, self.config.mc_vis_level)-1
+        check_level = min(self.sdf_octree.featured_level_num, self.config.mc_vis_level)-1
         if query_sdf:
             sdf_pred = np.zeros(sample_count)
         else: 
@@ -72,24 +73,25 @@ class Mesher():
                     batch_coord = coord[head:tail, :]
                     if self.cur_device == "cpu" and self.device == "cuda":
                         batch_coord = batch_coord.cuda()
-                    batch_feature = self.octree.query_feature(batch_coord, True) # query features
+                    batch_sdf_feature = self.sdf_octree.query_feature(batch_coord, True) # query features
+                    batch_color_feature = self.color_octree.query_feature(batch_coord, True) # query features
                     if query_sdf or query_color:
                         if not self.config.time_conditioned:
-                            batch_sdf, batch_color = self.sdf_color_decoder(batch_feature)
+                            batch_sdf, batch_color = self.sdf_color_decoder(batch_sdf_feature, batch_color_feature)
                             batch_sdf = -batch_sdf
                         else:
-                            batch_sdf = -self.sdf_color_decoder.time_conditionded_sdf(batch_feature, self.ts * torch.ones(batch_feature.shape[0], 1).cuda())
+                            batch_sdf = -self.sdf_color_decoder.time_conditionded_sdf(batch_sdf_feature, self.ts * torch.ones(batch_sdf_feature.shape[0], 1).cuda())
                         if query_sdf:
                             sdf_pred[head:tail] = batch_sdf.detach().cpu().numpy()
                         if query_color:
                             color_pred[head:tail] = batch_color.detach().cpu().numpy()
                     if query_sem:
-                        batch_sem = self.sem_decoder.sem_label(batch_feature)
+                        batch_sem = self.sem_decoder.sem_label(batch_sdf_feature)
                         sem_pred[head:tail] = batch_sem.detach().cpu().numpy()
                     if query_mask:
                         # get the marching cubes mask
                         # hierarchical_indices: bottom-up
-                        check_level_indices = self.octree.hierarchical_indices[check_level] 
+                        check_level_indices = self.sdf_octree.hierarchical_indices[check_level] 
                         # print(check_level_indices)
                         # if index is -1 for the level, then means the point is not valid under this level
                         mask_mc = check_level_indices >= 0
@@ -99,22 +101,23 @@ class Mesher():
                         mc_mask[head:tail] = mask_mc.detach().cpu().numpy()
                         # but for scimage's marching cubes, the top right corner's mask should also be true to conduct marching cubes
             else:
-                feature = self.octree.query_feature(coord, True)
+                sdf_feature = self.sdf_octree.query_feature(coord, True)
+                color_feature = self.color_octree.query_feature(coord, True)
                 if query_sdf or query_color:
                     if not self.config.time_conditioned:
-                        batch_sdf, batch_color = self.sdf_color_decoder(feature)
+                        batch_sdf, batch_color = self.sdf_color_decoder(sdf_feature, color_feature)
                         batch_sdf = -batch_sdf
                         if query_sdf:
                             sdf_pred = batch_sdf.detach().cpu().numpy()
                         if query_color:
                             color_pred = batch_color.detach().cpu().numpy()
                     else: # just for a quick test
-                        sdf_pred = -self.sdf_color_decoder.time_conditionded_sdf(feature, self.ts * torch.ones(feature.shape[0], 1).cuda()).detach().cpu().numpy()
+                        sdf_pred = -self.sdf_color_decoder.time_conditionded_sdf(sdf_feature, self.ts * torch.ones(sdf_feature.shape[0], 1).cuda()).detach().cpu().numpy()
                 if query_sem:
-                    sem_pred = self.sem_decoder.sem_label(feature).detach().cpu().numpy()
+                    sem_pred = self.sem_decoder.sem_label(sdf_feature).detach().cpu().numpy()
                 if query_mask:
                     # get the marching cubes mask
-                    check_level_indices = self.octree.hierarchical_indices[check_level] 
+                    check_level_indices = self.sdf_octree.hierarchical_indices[check_level] 
                     # if index is -1 for the level, then means the point is not valid under this level
                     mask_mc = check_level_indices >= 0
                     # all should be true (all the corner should be valid)
@@ -318,7 +321,7 @@ class Mesher():
                           filter_isolated_mesh = True, filter_free_space_vertices = True): 
 
         # query_level层的所有节点坐标，由于是从octree里直接得到所以是[-1,1]坐标系里的
-        nodes_coord_scaled = self.octree.get_octree_nodes(query_level) # query level top-down
+        nodes_coord_scaled = self.sdf_octree.get_octree_nodes(query_level) # query level top-down
         nodes_count = nodes_coord_scaled.shape[0]
         min_nodes = np.min(nodes_coord_scaled, 0) # 最小和最大坐标点
         max_nodes = np.max(nodes_coord_scaled, 0)

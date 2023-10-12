@@ -94,6 +94,16 @@ class SHINEConfig:
         self.poly_int_on: bool = True # use polynomial interpolation or linear interpolation
         self.octree_from_surface_samples: bool = True  # Use all the surface samples or just the exact measurements to build the octree. If True may lead to larger memory, but is more robust while the reconstruction.
 
+        # color octree
+        self.color_tree_level_world: int = 10  # the total octree level, allocated for the whole space
+        self.color_tree_level_feat: int = 4  # the octree levels with optimizable feature grid
+        # start from the leaf level
+        self.color_leaf_vox_size: float = 0.5  # voxel size of the octree leaf nodes (unit: m)
+        self.color_feature_dim: int = 8  # length of the feature for each grid feature
+        self.color_feature_std: float = 0.05  # grid feature initialization standard deviation
+        self.color_poly_int_on: bool = True # use polynomial interpolation or linear interpolation
+        self.color_octree_from_surface_samples: bool = True  # Use all the surface samples or just the exact measurements to build the octree. If True may lead to larger memory, but is more robust while the reconstruction.
+
         # sampler
         # spilt into 3 parts for sampling
         self.surface_sample_range_m: float = 0.5 # 表示点云中的点附近多少m范围内算“物体表面”，决定close to sorface sample
@@ -115,6 +125,7 @@ class SHINEConfig:
         self.continual_learning_reg: bool = True
         # regularization based
         self.lambda_forget: float = 1e5
+        self.color_lambda_forget: float = 1e2
         self.cal_importance_weight_down_rate: int = 2 # set it larger to save the consuming time
         
         # replay based
@@ -294,6 +305,16 @@ class SHINEConfig:
         self.poly_int_on = config_args["octree"]["poly_int_on"]
         # build the octree from the surface samples or only the measurement points
         self.octree_from_surface_samples = config_args["octree"]["octree_from_surface_samples"]
+
+        # color octree
+        self.color_tree_level_world = self.tree_level_world # the total octree level, allocated for the whole space
+        self.color_tree_level_feat = self.tree_level_feat  # the octree levels with optimizable feature grid
+        # start from the leaf level
+        self.color_leaf_vox_size = self.leaf_vox_size # voxel size of the octree leaf nodes (unit: m)
+        self.color_feature_dim = config_args["octree"]["color_feature_dim"] # length of the feature for each grid feature
+        # self.color_feature_std: float = 0.05  # grid feature initialization standard deviation
+        self.color_poly_int_on = config_args["octree"]["color_poly_int_on"] # use polynomial interpolation or linear interpolation
+        self.color_octree_from_surface_samples = self.octree_from_surface_samples
             
         # decoder
         self.geo_mlp_level = config_args["decoder"]["mlp_level"] # number of the level of the mlp decoder
@@ -330,6 +351,7 @@ class SHINEConfig:
         self.continual_learning_reg = config_args["continual"]["continual_learning_reg"]
         # the forgeting lambda for regularization based continual learning
         self.lambda_forget = float(config_args["continual"]["lambda_forget"])
+        self.color_lambda_forget = float(config_args["continual"]["color_lambda_forget"])
 
         # rehersal (replay) based method
         self.window_replay_on = config_args["continual"]["window_replay_on"]

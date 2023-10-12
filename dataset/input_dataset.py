@@ -21,7 +21,7 @@ from model.feature_octree import FeatureOctree
 # better to write a new dataloader for RGB-D inputs, not always converting them to KITTI Lidar format
 
 class InputDataset(Dataset):
-    def __init__(self, config: SHINEConfig, octree: FeatureOctree = None) -> None:
+    def __init__(self, config: SHINEConfig, sdf_octree: FeatureOctree = None, color_octree: FeatureOctree = None) -> None:
 
         super().__init__()
 
@@ -63,7 +63,8 @@ class InputDataset(Dataset):
             )
 
         # feature octree
-        self.octree = octree
+        self.sdf_octree = sdf_octree
+        self.color_octree = color_octree
 
         self.last_relative_tran = np.eye(4)
 
@@ -309,17 +310,23 @@ class InputDataset(Dataset):
         time_repeat = torch.tensor(frame_id, dtype=self.dtype, device=self.pool_device).repeat(coord.shape[0])
 
         # update feature octree
-        if self.octree is not None:
+        if self.sdf_octree is not None:
             if self.config.octree_from_surface_samples:
                 # 如果设置了octree_from_surface_samples，也就是用surface类型采样点来更新octree，就传递surface类型的采样点到update里，
                 # 并且注意这里的coord是scale后的坐标
                 # update with the sampled surface points
-                self.octree.update(coord[weight > 0, :].to(self.device), incremental_on)
+                self.sdf_octree.update(coord[weight > 0, :].to(self.device), incremental_on)
             else:
                 # 否则使用当前帧点云来更新octree，区别在于使用采样点更新的时候memory占用显然会更大，但是更robust
                 # 并且这里的点云坐标也是scale后的坐标
                 # update with the original points
-                self.octree.update(frame_pc_s_torch.to(self.device), incremental_on)  
+                self.sdf_octree.update(frame_pc_s_torch.to(self.device), incremental_on)
+
+        if self.color_octree is not None:
+            if self.config.color_octree_from_surface_samples:
+                self.color_octree.update(coord[weight > 0, :].to(self.device), incremental_on)
+            else:
+                self.color_octree.update(frame_pc_s_torch.to(self.device), incremental_on)  
 
         # get the data pool ready for training
         # TODO camera_origin_torch用不用保存，以及和origin_pool之间关系

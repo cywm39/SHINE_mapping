@@ -1,7 +1,7 @@
 setting:
   name: "rgb_r3live_incre_reg"
   output_root: "./experiments/"
-  pc_path: "/home/cy/NeRF/shine_mapping_input/whole_map_wo_pose"
+  pc_path: "/home/cy/NeRF/shine_mapping_input/Map_pointcloud_wo_pose"
   image_path: "/home/cy/NeRF/shine_mapping_input/image/resized_rgb"
   label_path: "" # optional for semantic mapping
   pose_path: "/home/cy/NeRF/shine_mapping_input/Lidar_pose_kitti.txt"
@@ -10,7 +10,7 @@ setting:
   model_path: "" 
   first_frame_ref: False
   begin_frame: 0
-  end_frame: 100
+  end_frame: 862
   every_frame: 1 # 1 means does not skip
   device: "cuda"
   gpu_id: "0"
@@ -49,6 +49,8 @@ octree:
   feature_dim: 32 # default: 8
   poly_int_on: True
   octree_from_surface_samples: True
+  color_feature_dim: 32
+  color_poly_int_on: True
 decoder:
   mlp_level: 2
   mlp_hidden_dim: 32
@@ -62,8 +64,9 @@ loss:
   ekional_loss_on: False
   weight_e: 0.1
 continual:
-  continual_learning_reg: False # using incremental mapping with regularization. default: True
+  continual_learning_reg: True # using incremental mapping with regularization. default: True. 注意关闭这个以后大于500帧时的too many scans, use cpu memory
   lambda_forget: 1e4 # the larger this value, the model would be less likely to forget. default: 1e4
+  color_lambda_forget: 1e2
   window_replay_on: False # replay within the sliding window
   window_radius_m: 0
 optimizer:
@@ -75,7 +78,7 @@ eval:
   wandb_vis_on: True # log to wandb or not. default: False
   o3d_vis_on: True # visualize the mapping or not
   vis_freq_iters: 0 
-  save_freq_iters: 10000 # save the model and octree every x iterations
+  save_freq_iters: 861 # save the model and octree every x iterations
   mesh_freq_frame: 5 # reconstruct the mesh every x frames
   mc_res_m: 0.1 # reconstruction marching cubes resolution. default: 0.1
   mc_with_octree: True # querying sdf only in certain levels of the octree

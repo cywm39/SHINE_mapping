@@ -15,38 +15,41 @@ class color_SDF_decoder(nn.Module):
         mlp_bias_on = config.geo_mlp_bias_on
         mlp_level = config.geo_mlp_level
 
-        input_layer_count = config.feature_dim
+        sdf_input_layer_count = config.feature_dim
         if is_time_conditioned:
-            input_layer_count += 1
+            sdf_input_layer_count += 1
 
         # predict sdf (now it anyway only predict sdf without further sigmoid
         # Initializa the structure of shared MLP
         layers = []
         for i in range(mlp_level):
             if i == 0:
-                layers.append(nn.Linear(input_layer_count, mlp_hidden_dim, mlp_bias_on))
+                layers.append(nn.Linear(sdf_input_layer_count, mlp_hidden_dim, mlp_bias_on))
             else:
                 layers.append(nn.Linear(mlp_hidden_dim, mlp_hidden_dim, mlp_bias_on))
         self.layers = nn.ModuleList(layers)
         self.sdf_out = nn.Linear(mlp_hidden_dim, 1, mlp_bias_on)
-        self.color_layer = nn.Linear(mlp_hidden_dim, mlp_hidden_dim, mlp_bias_on)
+
+        self.color_layer = nn.Linear(mlp_hidden_dim + config.color_feature_dim, mlp_hidden_dim, mlp_bias_on)
         self.color_out = nn.Linear(mlp_hidden_dim, 3, mlp_bias_on)
+        
         self.nclass_out = nn.Linear(mlp_hidden_dim, config.sem_class_count + 1, mlp_bias_on) # sem class + free space class
         # self.bn = nn.BatchNorm1d(self.hidden_dim, affine=False)
 
         self.to(config.device)
         # torch.cuda.empty_cache()
 
-    def forward(self, feature):
+    def forward(self, sdf_feature, color_feature):
         for k, l in enumerate(self.layers):
             if k == 0:
-                h = F.relu(l(feature))
+                h = F.relu(l(sdf_feature))
             else:
                 h = F.relu(l(h))
 
         sdf = self.sdf_out(h).squeeze(1)
 
-        color_feature = self.color_layer(h)
+        h = torch.cat((h, color_feature), dim=1)
+        color_feature = F.relu(self.color_layer(h))
         color = self.color_out(color_feature)
 
         return sdf, color

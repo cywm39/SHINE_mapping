@@ -150,10 +150,10 @@ def color_depth_rendering_loss(sample_depth, pred_occ, depth_label, pred_color, 
     weights = cum_mat / one_minus_alpha * alpha
 
     # depth error
-    weights_depth = weights * sort_sample_depth[:, 0 : alpha.shape[1]]
-    depth_render = torch.sum(weights_depth, 1)
-    d_error = torch.abs(depth_render - depth_label)
-    d_error_mean = torch.mean(d_error)
+    # weights_depth = weights * sort_sample_depth[:, 0 : alpha.shape[1]]
+    # depth_render = torch.sum(weights_depth, 1)
+    # d_error = torch.abs(depth_render - depth_label)
+    # d_error_mean = torch.mean(d_error)
 
     # color error
     weights = weights.unsqueeze(2).expand(-1, -1, 3)
@@ -163,6 +163,7 @@ def color_depth_rendering_loss(sample_depth, pred_occ, depth_label, pred_color, 
     c_error = torch.abs(color_render - color_label)
     c_error_mean = torch.mean(c_error)
 
-    total_error = d_error_mean + c_error_mean
+    # total_error = d_error_mean + c_error_mean
+    total_error = c_error_mean
 
     return total_error

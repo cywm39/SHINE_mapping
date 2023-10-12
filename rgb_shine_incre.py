@@ -39,7 +39,8 @@ def run_shine_mapping_incremental():
     dev = config.device
 
     # initialize the feature octree
-    octree = FeatureOctree(config)
+    sdf_octree = FeatureOctree(config, is_color=False)
+    color_octree = FeatureOctree(config, is_color=True)
     # initialize the mlp decoder
 
     mlp = color_SDF_decoder(config)
@@ -55,11 +56,10 @@ def run_shine_mapping_incremental():
             octree.print_detail()
 
     # dataset
-    dataset = InputDataset(config, octree)
+    dataset = InputDataset(config, sdf_octree, color_octree)
 
     # mesh reconstructor
-    # TODO 更新mesher里面对带颜色mesh的重建
-    mesher = Mesher(config, octree, mlp, mlp)
+    mesher = Mesher(config, sdf_octree, color_octree, mlp, mlp)
     mesher.global_transform = inv(dataset.begin_pose_inv)
 
     # Non-blocking visualizer
@@ -105,10 +105,12 @@ def run_shine_mapping_incremental():
         # 读取新的一帧点云并预处理，对这一帧点云进行采样得到采样点，更新octree，更新data pool
         dataset.process_frame(frame_id, incremental_on=config.continual_learning_reg or local_data_only)
         
-        octree_feat = list(octree.parameters())
+        sdf_octree_feat = list(sdf_octree.parameters())
+        color_octree_feat = list(color_octree.parameters())
         # 每帧都会设置一次optimizer，原因是每帧都会更新octree
-        opt = setup_optimizer(config, octree_feat, mlp_param, None, sigma_size)
-        octree.print_detail()
+        opt = setup_optimizer(config, sdf_octree_feat, color_octree_feat, mlp_param, None, sigma_size)
+        sdf_octree.print_detail()
+        color_octree.print_detail()
 
         T1 = get_time()
 
@@ -124,11 +126,12 @@ def run_shine_mapping_incremental():
 
             # interpolate and concat the hierachical grid features
             # 这里已经concat了各个level上的feature
-            feature = octree.query_feature(coord)
+            sdf_feature = sdf_octree.query_feature(coord)
+            color_feature = color_octree.query_feature(coord)
             
             # predict the scaled sdf with the feature
             # 输入的feature维度是(n, 8)，返回的sdf_pred维度是(n, 1)
-            sdf_pred, color_pred = mlp(feature)
+            sdf_pred, color_pred = mlp(sdf_feature, color_feature)
 
             # calculate the loss
             surface_mask = weight > 0
@@ -155,7 +158,7 @@ def run_shine_mapping_incremental():
             # TODO 每个采样点的sdf loss，先用ray loss做实验，之后再加进去
             # sdf_loss = sdf_bce_loss(sdf_pred, sdf_label, sigma_sigmoid, weight, config.loss_weight_on, config.loss_reduction) 
             # cur_loss += sdf_loss
-
+            cdr_loss = 0.
             # pred维度: (4096*6, 1)      
             # 给sdf值加一个sigmoid就是occupancy(the alpha in volume rendering), 参考decoder.py occupancy()
             pred_occ = torch.sigmoid(sdf_pred/sigma_size) # as occ. prob.
@@ -176,10 +179,13 @@ def run_shine_mapping_incremental():
             cur_loss += sdf_loss
 
             # incremental learning regularization loss 
-            reg_loss = 0.
+            sdf_reg_loss = 0.
+            color_reg_loss = 0.
             if config.continual_learning_reg:
-                reg_loss = octree.cal_regularization()
-                cur_loss += config.lambda_forget * reg_loss
+                sdf_reg_loss = sdf_octree.cal_regularization()    
+                color_reg_loss = color_octree.cal_regularization()
+                cur_loss += config.lambda_forget * sdf_reg_loss
+                cur_loss += config.color_lambda_forget * color_reg_loss
 
             # optional ekional loss
             eikonal_loss = 0.
@@ -205,7 +211,7 @@ def run_shine_mapping_incremental():
                 wandb_log_content = {
                     'iter': total_iter, 'loss/total_loss': cur_loss, 
                     'loss/color_depth_rendering_loss': cdr_loss, 'loss/sdf_loss': sdf_loss, \
-                    'loss/reg_loss':reg_loss, 'loss/eikonal_loss': eikonal_loss, 
+                    'loss/sdf_reg_loss':sdf_reg_loss, 'loss/color_reg_loss':color_reg_loss, 'loss/eikonal_loss': eikonal_loss, 
                     'loss/consistency_loss': consistency_loss} 
                 wandb.log(wandb_log_content)
         
@@ -214,8 +220,10 @@ def run_shine_mapping_incremental():
             opt.zero_grad(set_to_none=True)
             # TODO 这个计算importance的过程没太看懂，这个是用来更新octree的importance_weight的，这个importance_weight只有在cal_regularization
             # 算regularization loss的时候用到了
-            cal_feature_importance(dataset, octree, mlp, sigma_sigmoid, config.bs, \
-                config.cal_importance_weight_down_rate, config.loss_reduction)
+            # TODO cal_feature_importance对于sdf、color两棵树的修改没改完，这里面要计算loss然后反向传递的，但是只算了sdf loss，
+            # 那就只有sdf octree会受到影响，所以我想应该还需要加上color rendering loss才行
+            cal_feature_importance(dataset, sdf_octree, color_octree, mlp, sigma_sigmoid, config.bs, \
+                config.cal_importance_weight_down_rate, config.loss_reduction, sigma_size=sigma_size)
 
         T2 = get_time()
         
