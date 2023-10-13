@@ -136,13 +136,17 @@ class SHINEConfig:
         self.occu_update_on: bool = False
 
         # decoder
-        self.geo_mlp_level: int = 2
-        self.geo_mlp_hidden_dim: int = 32
-        self.geo_mlp_bias_on: bool = True
+        self.sdf_mlp_level: int = 2
+        self.sdf_mlp_hidden_dim: int = 32
+        self.sdf_mlp_bias_on: bool = True
 
         self.sem_mlp_level: int = 2
         self.sem_mlp_hidden_dim: int = 32
         self.sem_mlp_bias_on: bool = True
+
+        self.color_mlp_level: int = 2
+        self.color_mlp_hidden_dim: int = 32
+        self.color_mlp_bias_on: bool = True
         
         self.freeze_after_frame: int = 20  # For incremental mode only, if the decoder model is not loaded , it would be trained and freezed after such frame number
 
@@ -317,10 +321,13 @@ class SHINEConfig:
         self.color_octree_from_surface_samples = self.octree_from_surface_samples
             
         # decoder
-        self.geo_mlp_level = config_args["decoder"]["mlp_level"] # number of the level of the mlp decoder
-        self.geo_mlp_hidden_dim = config_args["decoder"]["mlp_hidden_dim"] # dimension of the mlp's hidden layer
+        self.sdf_mlp_level = config_args["decoder"]["mlp_level"] # number of the level of the mlp decoder
+        self.sdf_mlp_hidden_dim = config_args["decoder"]["mlp_hidden_dim"] # dimension of the mlp's hidden layer
         # freeze the decoder after runing for x frames (used for incremental mapping to avoid forgeting)
         self.freeze_after_frame = config_args["decoder"]["freeze_after_frame"]
+
+        self.color_mlp_level = config_args["decoder"]["color_mlp_level"] # number of the level of the color mlp decoder
+        self.color_mlp_hidden_dim = config_args["decoder"]["color_mlp_hidden_dim"] # dimension of the color mlp's hidden layer
 
         # do the prediction conditioned on time (frame ID)
         # self.time_conditioned = config_args["decoder"][ 

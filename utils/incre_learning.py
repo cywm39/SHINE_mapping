@@ -3,11 +3,13 @@ from tqdm import tqdm
 from model.feature_octree import FeatureOctree
 from model.decoder import Decoder
 from model.color_SDF_decoder import color_SDF_decoder
+from model.sdf_decoder import SDFDecoder
+from model.color_decoder import ColorDecoder
 from dataset.input_dataset import InputDataset
 from utils.loss import *
 
-def cal_feature_importance(data: InputDataset, sdf_octree: FeatureOctree, color_octree: FeatureOctree, mlp: color_SDF_decoder, 
-    sigma, bs, down_rate=1, loss_reduction='mean', loss_weight_on = False, sigma_size = None):
+def cal_feature_importance(data: InputDataset, sdf_octree: FeatureOctree, color_octree: FeatureOctree, sdf_mlp: SDFDecoder, 
+    color_mlp: ColorDecoder, sigma, bs, down_rate=1, loss_reduction='mean', loss_weight_on = False, sigma_size = None):
     
     # shuffle_indice = torch.randperm(data.coord_pool.shape[0])
     # shuffle_coord = data.coord_pool[shuffle_indice]
@@ -42,7 +44,9 @@ def cal_feature_importance(data: InputDataset, sdf_octree: FeatureOctree, color_
         color_octree.get_indices(batch_coord)
         sdf_features = sdf_octree.query_feature(batch_coord)
         color_features = color_octree.query_feature(batch_coord)
-        sdf_pred, color_pred = mlp(sdf_features, color_features) # before sigmoid         
+        # sdf_pred, color_pred = mlp(sdf_features, color_features) # before sigmoid         
+        sdf_pred = sdf_mlp.predict_sdf(sdf_features)
+        color_pred = color_mlp.predict_color(color_features)
         # add options for other losses here                              
         sdf_loss = sdf_bce_loss(sdf_pred, batch_label, sigma, None, loss_weight_on, loss_reduction)
         total_loss += sdf_loss

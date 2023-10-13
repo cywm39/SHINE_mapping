@@ -55,13 +55,17 @@ def setup_experiment(config: SHINEConfig):
 
 
 # 在默认的配置下，只有octree和geo_mlp被加入到optimizer中
-def setup_optimizer(config: SHINEConfig, sdf_octree_feat, color_octree_feat, mlp_geo_param, mlp_sem_param, sigma_size) -> Optimizer:
+def setup_optimizer(config: SHINEConfig, sdf_octree_feat, color_octree_feat, sdf_mlp_param, color_mlp_param, 
+                    mlp_sem_param, sigma_size) -> Optimizer:
     lr_cur = config.lr
     opt_setting = []
     # weight_decay is for L2 regularization, only applied to MLP
-    if mlp_geo_param is not None:
-        mlp_geo_param_opt_dict = {'params': mlp_geo_param, 'lr': lr_cur, 'weight_decay': config.weight_decay} 
-        opt_setting.append(mlp_geo_param_opt_dict)
+    if sdf_mlp_param is not None:
+        sdf_mlp_param_opt_dict = {'params': sdf_mlp_param, 'lr': lr_cur, 'weight_decay': config.weight_decay} 
+        opt_setting.append(sdf_mlp_param_opt_dict)
+    if color_mlp_param is not None:
+        color_mlp_param_opt_dict = {'params': color_mlp_param, 'lr': lr_cur, 'weight_decay': config.weight_decay} 
+        opt_setting.append(color_mlp_param_opt_dict)
     if config.semantic_on and mlp_sem_param is not None:
         mlp_sem_param_opt_dict = {'params': mlp_sem_param, 'lr': lr_cur, 'weight_decay': config.weight_decay} 
         opt_setting.append(mlp_sem_param_opt_dict)

@@ -11,17 +11,21 @@ from utils.semantic_kitti_utils import *
 from model.feature_octree import FeatureOctree
 from model.decoder import Decoder
 from model.color_SDF_decoder import color_SDF_decoder
+from model.sdf_decoder import SDFDecoder
+from model.color_decoder import ColorDecoder
 
 class Mesher():
 
     def __init__(self, config: SHINEConfig, sdf_octree: FeatureOctree, color_octree: FeatureOctree, \
-        sdf_color_decoder: color_SDF_decoder, sem_decoder: color_SDF_decoder):
+        sdf_decoder: SDFDecoder, color_decoder: ColorDecoder, sem_decoder: color_SDF_decoder):
 
         self.config = config
     
         self.sdf_octree = sdf_octree
         self.color_octree = color_octree
-        self.sdf_color_decoder = sdf_color_decoder
+        # self.sdf_color_decoder = sdf_color_decoder
+        self.sdf_decoder = sdf_decoder
+        self.color_decoder = color_decoder
         self.sem_decoder = sem_decoder
         self.device = config.device
         self.cur_device = self.device
@@ -75,16 +79,29 @@ class Mesher():
                         batch_coord = batch_coord.cuda()
                     batch_sdf_feature = self.sdf_octree.query_feature(batch_coord, True) # query features
                     batch_color_feature = self.color_octree.query_feature(batch_coord, True) # query features
-                    if query_sdf or query_color:
+                    # if query_sdf or query_color:
+                    #     if not self.config.time_conditioned:
+                    #         batch_sdf, batch_color = self.sdf_color_decoder(batch_sdf_feature, batch_color_feature)
+                    #         batch_sdf = -batch_sdf
+                    #     else:
+                    #         batch_sdf = -self.sdf_color_decoder.time_conditionded_sdf(batch_sdf_feature, self.ts * torch.ones(batch_sdf_feature.shape[0], 1).cuda())
+                    #     if query_sdf:
+                    #         sdf_pred[head:tail] = batch_sdf.detach().cpu().numpy()
+                    #     if query_color:
+                    #         color_pred[head:tail] = batch_color.detach().cpu().numpy()
+                    if query_sdf:
                         if not self.config.time_conditioned:
-                            batch_sdf, batch_color = self.sdf_color_decoder(batch_sdf_feature, batch_color_feature)
+                            batch_sdf = self.sdf_decoder.predict_sdf(batch_sdf_feature)
                             batch_sdf = -batch_sdf
                         else:
-                            batch_sdf = -self.sdf_color_decoder.time_conditionded_sdf(batch_sdf_feature, self.ts * torch.ones(batch_sdf_feature.shape[0], 1).cuda())
-                        if query_sdf:
-                            sdf_pred[head:tail] = batch_sdf.detach().cpu().numpy()
-                        if query_color:
-                            color_pred[head:tail] = batch_color.detach().cpu().numpy()
+                            batch_sdf = -self.sdf_decoder.time_conditionded_sdf(batch_sdf_feature, self.ts * torch.ones(batch_sdf_feature.shape[0], 1).cuda())
+                        sdf_pred[head:tail] = batch_sdf.detach().cpu().numpy()
+                    if query_color:
+                        if not self.config.time_conditioned:
+                            batch_color = self.color_decoder.predict_color(batch_color_feature)
+                        else:
+                            batch_color = self.color_decoder.time_conditionded_color(batch_color_feature, self.ts * torch.ones(batch_color_feature.shape[0], 1).cuda())
+                        color_pred[head:tail] = batch_color.detach().cpu().numpy()
                     if query_sem:
                         batch_sem = self.sem_decoder.sem_label(batch_sdf_feature)
                         sem_pred[head:tail] = batch_sem.detach().cpu().numpy()
@@ -103,16 +120,29 @@ class Mesher():
             else:
                 sdf_feature = self.sdf_octree.query_feature(coord, True)
                 color_feature = self.color_octree.query_feature(coord, True)
-                if query_sdf or query_color:
+                # if query_sdf or query_color:
+                #     if not self.config.time_conditioned:
+                #         batch_sdf, batch_color = self.sdf_color_decoder(sdf_feature, color_feature)
+                #         batch_sdf = -batch_sdf
+                #         if query_sdf:
+                #             sdf_pred = batch_sdf.detach().cpu().numpy()
+                #         if query_color:
+                #             color_pred = batch_color.detach().cpu().numpy()
+                #     else: # just for a quick test
+                #         sdf_pred = -self.sdf_color_decoder.time_conditionded_sdf(sdf_feature, self.ts * torch.ones(sdf_feature.shape[0], 1).cuda()).detach().cpu().numpy()
+                if query_sdf:
                     if not self.config.time_conditioned:
-                        batch_sdf, batch_color = self.sdf_color_decoder(sdf_feature, color_feature)
-                        batch_sdf = -batch_sdf
-                        if query_sdf:
-                            sdf_pred = batch_sdf.detach().cpu().numpy()
-                        if query_color:
-                            color_pred = batch_color.detach().cpu().numpy()
-                    else: # just for a quick test
-                        sdf_pred = -self.sdf_color_decoder.time_conditionded_sdf(sdf_feature, self.ts * torch.ones(sdf_feature.shape[0], 1).cuda()).detach().cpu().numpy()
+                        sdf_pred = self.sdf_decoder.predict_sdf(sdf_feature)
+                        sdf_pred = -sdf_pred
+                        sdf_pred = sdf_pred.detach().cpu().numpy()
+                    else: 
+                        sdf_pred = -self.sdf_decoder.time_conditionded_sdf(sdf_feature, self.ts * torch.ones(sdf_feature.shape[0], 1).cuda()).detach().cpu().numpy()
+                if query_color:
+                    if not self.config.time_conditioned:
+                        color_pred = self.color_decoder.predict_color(color_feature)
+                        color_pred = color_pred.detach().cpu().numpy()
+                    else:
+                        color_pred = self.color_decoder.time_conditionded_color(color_feature, self.ts * torch.ones(color_feature.shape[0], 1).cuda()).detach().cpu().numpy()
                 if query_sem:
                     sem_pred = self.sem_decoder.sem_label(sdf_feature).detach().cpu().numpy()
                 if query_mask:

@@ -21,6 +21,8 @@ from utils.visualizer import MapVisualizer, random_color_table
 from model.feature_octree import FeatureOctree
 from model.decoder import Decoder
 from model.color_SDF_decoder import color_SDF_decoder
+from model.sdf_decoder import SDFDecoder
+from model.color_decoder import ColorDecoder
 from dataset.input_dataset import InputDataset
 
 def run_shine_mapping_incremental():
@@ -43,7 +45,9 @@ def run_shine_mapping_incremental():
     color_octree = FeatureOctree(config, is_color=True)
     # initialize the mlp decoder
 
-    mlp = color_SDF_decoder(config)
+    # mlp = color_SDF_decoder(config)
+    sdf_mlp = SDFDecoder(config)
+    color_mlp = ColorDecoder(config)
 
     # Load the decoder model
     if config.load_model:
@@ -59,7 +63,7 @@ def run_shine_mapping_incremental():
     dataset = InputDataset(config, sdf_octree, color_octree)
 
     # mesh reconstructor
-    mesher = Mesher(config, sdf_octree, color_octree, mlp, mlp)
+    mesher = Mesher(config, sdf_octree, color_octree, sdf_mlp, color_mlp, None)
     mesher.global_transform = inv(dataset.begin_pose_inv)
 
     # Non-blocking visualizer
@@ -67,7 +71,9 @@ def run_shine_mapping_incremental():
         vis = MapVisualizer()
 
     # learnable parameters
-    mlp_param = list(mlp.parameters())
+    # mlp_param = list(mlp.parameters())
+    sdf_mlp_param = list(sdf_mlp.parameters())
+    color_mlp_param = list(color_mlp.parameters())
     # learnable sigma for differentiable rendering
     sigma_size = torch.nn.Parameter(torch.ones(1, device=dev)*1.0) 
     # fixed sigma for sdf prediction supervised with BCE loss
@@ -93,7 +99,8 @@ def run_shine_mapping_incremental():
 
         if processed_frame == config.freeze_after_frame: # freeze the decoder after certain frame
             print("Freeze the decoder")
-            freeze_model(mlp) # fixed the decoder
+            freeze_model(sdf_mlp) # fixed the decoder
+            freeze_model(color_mlp)
 
         T0 = get_time()
         # preprocess, sample data and update the octree
@@ -108,7 +115,7 @@ def run_shine_mapping_incremental():
         sdf_octree_feat = list(sdf_octree.parameters())
         color_octree_feat = list(color_octree.parameters())
         # 每帧都会设置一次optimizer，原因是每帧都会更新octree
-        opt = setup_optimizer(config, sdf_octree_feat, color_octree_feat, mlp_param, None, sigma_size)
+        opt = setup_optimizer(config, sdf_octree_feat, color_octree_feat, sdf_mlp_param, color_mlp_param, None, sigma_size)
         sdf_octree.print_detail()
         color_octree.print_detail()
 
@@ -131,7 +138,9 @@ def run_shine_mapping_incremental():
             
             # predict the scaled sdf with the feature
             # 输入的feature维度是(n, 8)，返回的sdf_pred维度是(n, 1)
-            sdf_pred, color_pred = mlp(sdf_feature, color_feature)
+            # sdf_pred, color_pred = mlp(sdf_feature, color_feature)
+            sdf_pred = sdf_mlp.predict_sdf(sdf_feature)
+            color_pred = color_mlp.predict_color(color_feature)
 
             # calculate the loss
             surface_mask = weight > 0
@@ -161,7 +170,8 @@ def run_shine_mapping_incremental():
             cdr_loss = 0.
             # pred维度: (4096*6, 1)      
             # 给sdf值加一个sigmoid就是occupancy(the alpha in volume rendering), 参考decoder.py occupancy()
-            pred_occ = torch.sigmoid(sdf_pred/sigma_size) # as occ. prob.
+            sdf_pred_copy = sdf_pred.detach()
+            pred_occ = torch.sigmoid(sdf_pred_copy/sigma_size) # as occ. prob.
             # pred_ray维度: (4096, 6)
             pred_ray = pred_occ.reshape(config.bs, -1)
             # sample_depth reshape后维度: (4096, 6)
@@ -220,9 +230,7 @@ def run_shine_mapping_incremental():
             opt.zero_grad(set_to_none=True)
             # TODO 这个计算importance的过程没太看懂，这个是用来更新octree的importance_weight的，这个importance_weight只有在cal_regularization
             # 算regularization loss的时候用到了
-            # TODO cal_feature_importance对于sdf、color两棵树的修改没改完，这里面要计算loss然后反向传递的，但是只算了sdf loss，
-            # 那就只有sdf octree会受到影响，所以我想应该还需要加上color rendering loss才行
-            cal_feature_importance(dataset, sdf_octree, color_octree, mlp, sigma_sigmoid, config.bs, \
+            cal_feature_importance(dataset, sdf_octree, color_octree, sdf_mlp, color_mlp, sigma_sigmoid, config.bs, \
                 config.cal_importance_weight_down_rate, config.loss_reduction, sigma_size=sigma_size)
 
         T2 = get_time()

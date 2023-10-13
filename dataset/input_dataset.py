@@ -264,7 +264,8 @@ class InputDataset(Dataset):
         frame_origin = self.cur_pose_ref[:3, 3] * self.config.scale  # translation part
         frame_origin_torch = torch.tensor(frame_origin, dtype=self.dtype, device=self.pool_device)
 
-        cur_camera_pose_ref = self.lidar2camera_matrix @ self.cur_pose_ref
+        # cur_camera_pose_ref = self.lidar2camera_matrix @ self.cur_pose_ref
+        cur_camera_pose_ref = self.cur_pose_ref @ self.lidar2camera_matrix
         camera_origin = cur_camera_pose_ref[:3, 3] * self.config.scale
         camera_origin_torch = torch.tensor(camera_origin, dtype=self.dtype, device=self.pool_device)
 
