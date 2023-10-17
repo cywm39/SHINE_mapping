@@ -193,6 +193,7 @@ class SHINEConfig:
         self.opt_adam: bool = True  # use adam or sgd
         self.bs: int = 4096
         self.lr: float = 1e-3 # optimizer的初始lr
+        self.calibration_lr: float = 1e-3 # 外参矩阵的lr
         self.weight_decay: float = 0
         self.adam_eps: float = 1e-15
         self.lr_level_reduce_ratio: float = 1.0
@@ -208,6 +209,7 @@ class SHINEConfig:
         self.eval_freq_iters: int = 100
         self.vis_freq_iters: int = 100
         self.save_freq_iters: int = 100
+        self.save_freq_frame: int = 200
         self.mesh_freq_frame: int = 1  # do the reconstruction per x frames
         
         # marching cubes related
@@ -377,6 +379,7 @@ class SHINEConfig:
         self.bs = config_args["optimizer"]["batch_size"]
         # self.adam_eps = float(config_args["optimizer"]["adam_eps"])
         self.lr = float(config_args["optimizer"]["learning_rate"])
+        self.calibration_lr = float(config_args["optimizer"]["calibration_lr"])
         # self.lr_level_reduce_ratio = config_args["optimizer"][
         #     "lr_level_reduce_ratio"
         # ]  # decay the learning rate for higher level of feature grids by such ratio
@@ -391,6 +394,7 @@ class SHINEConfig:
         self.o3d_vis_on = config_args["eval"]["o3d_vis_on"] # turn on the open3d visualizer to visualize the mapping progress or not
         self.vis_freq_iters = config_args["eval"]["vis_freq_iters"] # frequency for mesh reconstruction for batch mode (per x iters)
         self.save_freq_iters = config_args["eval"]["save_freq_iters"] # frequency for model saving for batch mode (per x iters)
+        self.save_freq_frame = config_args["eval"]["save_freq_frame"]
         self.mesh_freq_frame = config_args["eval"]["mesh_freq_frame"] # frequency for mesh reconstruction for incremental mode (per x frame)
         self.mc_with_octree = config_args["eval"]["mc_with_octree"] # using octree to narrow down the region that needs the sdf query so as to boost the efficieny
         # if false, we query all the positions within the map bounding box

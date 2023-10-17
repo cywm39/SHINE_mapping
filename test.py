@@ -6,6 +6,10 @@ import os
 from natsort import natsorted 
 from utils.pose import read_poses_file
 import sys
+import torch
+import torch.nn as nn
+from torch import optim
+from tqdm import tqdm
 
 def preprocess_kitti(points, z_th=-3.0, min_range=2.5):
     # filter the outliers
@@ -135,17 +139,26 @@ def read_point_cloud(filename: str):
 # o3d.visualization.draw_geometries([mesh])
 
 
+# 点云映射到图片上
 if __name__ == "__main__":
-    pc_path = "/home/cy/NeRF/r3live_data/degenerate_seq_00_PointCloud2"
+    pc_path = "/home/cy/NeRF/shine_mapping_input/whole_map_wo_pose"
     pose_file_path = "/home/cy/NeRF/shine_mapping_input/Lidar_pose_kitti.txt"
     image_path = "/home/cy/NeRF/shine_mapping_input/image/resized_rgb"
-    output_image_folder_path = "/home/cy/NeRF/shine_mapping_input/pc2image_whole_map3/"
+    output_image_folder_path = "/home/cy/NeRF/shine_mapping_input/pc2image_whole_map4/"
 
     camera2lidar_matrix = np.array([-0.00113207, -0.0158688, 0.999873, 0.050166,
             -0.9999999,  -0.000486594, -0.00113994, 0.0474116,
             0.000504622,  -0.999874,  -0.0158682, -0.0312415,
             0, 0, 0, 1]).reshape(4, 4)
-    lidar2camera_matrix = np.linalg.inv(camera2lidar_matrix)
+    # lidar2camera_matrix = np.linalg.inv(camera2lidar_matrix)
+    lidar2camera_matrix = np.array([[    -0.0000002596,     -0.8758301735,     -0.0000002596,
+              0.0336565562],
+        [     0.0000002596,      0.0000002596,     -0.8757055402,
+             -0.0295539070],
+        [     0.8757054806,      0.0000002596,      0.0000002596,
+             -0.0338485502],
+        [     0.0000000000,      0.0000000000,      0.0000000000,
+              1.0165320635]])
 
     H, W, fx, fy, cx, cy, = 1024, 1280, 863.4241, 863.4171, 640.6808, 518.3392
 
@@ -200,9 +213,9 @@ if __name__ == "__main__":
         # frame_pc.points = o3d.utility.Vector3dVector(frame_pc_points)
         image_frame_path = os.path.join(image_path, image_filenames[pose_index])
         frame_image = cv2.imread(image_frame_path)
-        frame_image = cv2.undistort(frame_image, camera_matrix, distortion_coeffs)
+        # frame_image = cv2.undistort(frame_image, camera_matrix, distortion_coeffs)
 
-        white_image = np.zeros((H, W, 3), dtype=np.uint8) * 255
+        white_image = np.ones((H, W, 3), dtype=np.uint8) * 255
 
         points_int = points2d_camera.astype(int)
         pixel_colors = frame_image[points_int[:, 1], points_int[:, 0]]
@@ -339,4 +352,23 @@ if __name__ == "__main__":
 #         source_pc = source_pc.transform(np.linalg.inv(pose))
 #         o3d.io.write_point_cloud(output_path + filename, source_pc)
 #         index += 1
+
+# # retain_graph测试程序        
+# if __name__ == "__main__":
+#     torch.autograd.set_detect_anomaly(True)
+#     lidar2camera_matrix = nn.Parameter(torch.rand([4,4], requires_grad=True))
+#     for frame_id in tqdm(range(100)):
+#         coord = lidar2camera_matrix @ torch.rand(4,4)
+#         opt = optim.Adam([{'params': [lidar2camera_matrix], 'lr': 1e-3, 'weight_decay': 0}], betas=(0.9,0.99), eps = 1e-15) 
         
+#         for iter in tqdm(range(50)):
+#             index = torch.randint(0, 4, (1,))
+#             y = coord[index]
+#             loss_bce = nn.BCEWithLogitsLoss(reduction="mean")
+#             loss = loss_bce(y, torch.tensor([[1.,1.,1.,1.]]))
+
+#             opt.zero_grad()
+#             loss.backward(retain_graph=True)
+#             # loss.backward()
+#             opt.step()
+

@@ -21,9 +21,9 @@ camera:
   fy: 863.4171
   cx: 640.6808
   cy: 518.3392
-  camera_ext_matrix: [-0.00113207, -0.0158688, 0.999873, 0,
-                      -0.9999999,  -0.000486594, -0.00113994, 0,
-                      0.000504622,  -0.999874,  -0.0158682, 0,
+  camera_ext_matrix: [-0.00113207, -0.0158688, 0.999873, 0.050166,
+                      -0.9999999,  -0.000486594, -0.00113994, 0.0474116,
+                      0.000504622,  -0.999874,  -0.0158682, -0.0312415,
                       0, 0, 0, 1]
   # camera_ext_matrix: [-0.00113207, -0.9999999, 0.000504622, 0, 
   #                     -0.0158688,  -0.000486594, -0.999874, 0,
@@ -55,6 +55,8 @@ decoder:
   mlp_level: 2
   mlp_hidden_dim: 32
   freeze_after_frame: 20
+  color_mlp_level: 2
+  color_mlp_hidden_dim: 32
 loss:
   ray_loss: True
   main_loss_type: dr  # select from sdf_bce (our proposed), sdf_l1, sdf_l2, dr, dr_neus
@@ -66,19 +68,21 @@ loss:
 continual:
   continual_learning_reg: True # using incremental mapping with regularization. default: True. 注意关闭这个以后大于500帧时的too many scans, use cpu memory
   lambda_forget: 1e4 # the larger this value, the model would be less likely to forget. default: 1e4
-  color_lambda_forget: 1e2
+  color_lambda_forget: 0
   window_replay_on: False # replay within the sliding window
   window_radius_m: 0
 optimizer:
   iters: 50  # iterations per frame. default value is 50.
   batch_size: 4096
   learning_rate: 0.01
+  calibration_lr: 0.00001
   weight_decay: 1e-7 # l2 regularization
 eval:
   wandb_vis_on: True # log to wandb or not. default: False
-  o3d_vis_on: True # visualize the mapping or not
+  o3d_vis_on: False # visualize the mapping or not
   vis_freq_iters: 0 
   save_freq_iters: 861 # save the model and octree every x iterations
+  save_freq_frame: 50 # save the model and octree every x frames
   mesh_freq_frame: 5 # reconstruct the mesh every x frames
   mc_res_m: 0.1 # reconstruction marching cubes resolution. default: 0.1
   mc_with_octree: True # querying sdf only in certain levels of the octree

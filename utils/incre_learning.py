@@ -60,7 +60,7 @@ def cal_feature_importance(data: InputDataset, sdf_octree: FeatureOctree, color_
         cdr_loss = color_depth_rendering_loss(sample_depth, pred_ray, ray_depth, color_pred, color_label, neus_on=False)
         total_loss += cdr_loss
 
-        total_loss.backward()
+        total_loss.backward(retain_graph=True)
 
         for i in range(len(sdf_octree.importance_weight)): # for each level
             sdf_octree.importance_weight[i] += sdf_octree.hier_features[i].grad.abs()

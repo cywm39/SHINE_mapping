@@ -21,7 +21,8 @@ from model.feature_octree import FeatureOctree
 # better to write a new dataloader for RGB-D inputs, not always converting them to KITTI Lidar format
 
 class InputDataset(Dataset):
-    def __init__(self, config: SHINEConfig, sdf_octree: FeatureOctree = None, color_octree: FeatureOctree = None) -> None:
+    def __init__(self, config: SHINEConfig, sdf_octree: FeatureOctree = None, color_octree: FeatureOctree = None,
+                 lidar2camera_matrix = None) -> None:
 
         super().__init__()
 
@@ -31,7 +32,8 @@ class InputDataset(Dataset):
         self.device = config.device
 
         self.camera2lidar_matrix = self.config.camera_ext_matrix
-        self.lidar2camera_matrix = np.linalg.inv(self.camera2lidar_matrix)
+        # self.lidar2camera_matrix = np.linalg.inv(self.camera2lidar_matrix)
+        self.lidar2camera_matrix = lidar2camera_matrix
 
         self.calib = {}
         if config.calib_path != '':
@@ -203,19 +205,23 @@ class InputDataset(Dataset):
             frame_sem_rgb = np.asarray(frame_sem_rgb, dtype=np.float64)/255.0
             frame_pc.colors = o3d.utility.Vector3dVector(frame_sem_rgb)
         
+        lidar2camera_matrix_tmp = self.lidar2camera_matrix.detach().cpu().numpy()
+        # lidar2camera_matrix_tmp.requires_grad = False
         # 去掉不能映射到相机图片中的点
         # 将点从雷达坐标系转到相机坐标系
         frame_pc_points = np.asarray(frame_pc.points, dtype=np.float64)
         points3d_lidar = np.asarray(frame_pc.points, dtype=np.float64)
+        print("befor first filter, points3d_lidar.shape[0]: " + str(points3d_lidar.shape[0]))
         # points3d_lidar = frame_pc.clone()
         points3d_lidar = np.insert(points3d_lidar, 3, 1, axis=1)
-        points3d_camera = self.lidar2camera_matrix @ points3d_lidar.T
+        points3d_camera = lidar2camera_matrix_tmp @ points3d_lidar.T
         H, W, fx, fy, cx, cy, = self.config.H, self.config.W, self.config.fx, self.config.fy, self.config.cx, self.config.cy
         K = np.array([[fx, .0, cx, .0], [.0, fy, cy, .0], [.0, .0, 1.0, .0]]).reshape(3, 4)
         # 过滤掉相机坐标系内位于相机之后的点
         tmp_mask = points3d_camera[2, :] > 0.0
         points3d_camera = points3d_camera[:, tmp_mask]
         frame_pc_points = frame_pc_points[tmp_mask]
+        print("after first filter, points3d_camera.shape[1]: " + str(points3d_camera.shape[1]))
         # 从相机坐标系映射到uv平面坐标
         points2d_camera = K @ points3d_camera
         points2d_camera = (points2d_camera[:2, :] / points2d_camera[2, :]).T # 操作之后points2d_camera维度:[n, 2]
@@ -228,6 +234,7 @@ class InputDataset(Dataset):
         points2d_camera = points2d_camera[tmp_mask]
         # points3d_camera = (points3d_camera.T)[tmp_mask] # 操作之后points3d_camera维度: [n, 4]
         frame_pc_points = frame_pc_points[tmp_mask]
+        print("after second filter, points2d_camera.shape[0]: " + str(points2d_camera.shape[0]))
         # 取出图像内uv坐标对应的颜色
         frame_color_label = torch.tensor(frame_image[points2d_camera[:,1].astype(int), points2d_camera[:,0].astype(int)], 
                                          device=self.pool_device)
@@ -265,9 +272,13 @@ class InputDataset(Dataset):
         frame_origin_torch = torch.tensor(frame_origin, dtype=self.dtype, device=self.pool_device)
 
         # cur_camera_pose_ref = self.lidar2camera_matrix @ self.cur_pose_ref
-        cur_camera_pose_ref = self.cur_pose_ref @ self.lidar2camera_matrix
+        cur_pose_ref_torch = torch.tensor(self.cur_pose_ref, dtype=self.dtype, device=self.pool_device)
+        cur_camera_pose_ref = cur_pose_ref_torch @ self.lidar2camera_matrix
+        # cur_camera_pose_ref.retain_grad()
         camera_origin = cur_camera_pose_ref[:3, 3] * self.config.scale
-        camera_origin_torch = torch.tensor(camera_origin, dtype=self.dtype, device=self.pool_device)
+        # camera_origin.retain_grad()
+        # camera_origin_torch = torch.tensor(camera_origin, dtype=self.dtype, device=self.pool_device)
+        camera_origin_torch = camera_origin
 
         # transform to reference frame 
         frame_pc = frame_pc.transform(self.cur_pose_ref)

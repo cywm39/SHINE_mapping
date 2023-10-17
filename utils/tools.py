@@ -56,7 +56,7 @@ def setup_experiment(config: SHINEConfig):
 
 # 在默认的配置下，只有octree和geo_mlp被加入到optimizer中
 def setup_optimizer(config: SHINEConfig, sdf_octree_feat, color_octree_feat, sdf_mlp_param, color_mlp_param, 
-                    mlp_sem_param, sigma_size) -> Optimizer:
+                    mlp_sem_param, sigma_size, lidar2camera_matrix) -> Optimizer:
     lr_cur = config.lr
     opt_setting = []
     # weight_decay is for L2 regularization, only applied to MLP
@@ -69,6 +69,9 @@ def setup_optimizer(config: SHINEConfig, sdf_octree_feat, color_octree_feat, sdf
     if config.semantic_on and mlp_sem_param is not None:
         mlp_sem_param_opt_dict = {'params': mlp_sem_param, 'lr': lr_cur, 'weight_decay': config.weight_decay} 
         opt_setting.append(mlp_sem_param_opt_dict)
+    if lidar2camera_matrix is not None:
+        lidar2camera_matrix_param_opt_dict = {'params': [lidar2camera_matrix], 'lr': config.calibration_lr, 'weight_decay': config.weight_decay}
+        opt_setting.append(lidar2camera_matrix_param_opt_dict)
     # feature octree
     for i in range(config.tree_level_feat):
         # try to also add L2 regularization on the feature octree (results not quite good)
@@ -211,14 +214,15 @@ def unfreeze_model(model: nn.Module):
 
 
 def save_checkpoint(
-    feature_octree, geo_decoder, sem_decoder, optimizer, run_path, checkpoint_name, iters
+    sdf_octree, color_octree, sdf_decoder, color_decoder, optimizer, run_path, checkpoint_name, frame
 ):
     torch.save(
         {
-            "iters": iters,
-            "feature_octree": feature_octree, # save the whole NN module (the hierachical features and the indexing structure)
-            "geo_decoder": geo_decoder.state_dict(),
-            "sem_decoder": sem_decoder.state_dict(),
+            "frame": frame,
+            "sdf_octree": sdf_octree, # save the whole NN module (the hierachical features and the indexing structure)
+            "color_octree": color_octree,
+            "sdf_decoder": sdf_decoder.state_dict(),
+            "color_decoder": color_decoder.state_dict(),
             "optimizer": optimizer.state_dict(),
         },
         os.path.join(run_path, f"{checkpoint_name}.pth"),
@@ -226,9 +230,9 @@ def save_checkpoint(
     print(f"save the model to {run_path}/{checkpoint_name}.pth")
 
 
-def save_decoder(geo_decoder, sem_decoder, run_path, checkpoint_name):
-    torch.save({"geo_decoder": geo_decoder.state_dict(), 
-                "sem_decoder": sem_decoder.state_dict()},
+def save_decoder(sdf_decoder, color_decoder, run_path, checkpoint_name):
+    torch.save({"sdf_decoder": sdf_decoder.state_dict(), 
+                "color_decoder": color_decoder.state_dict()},
         os.path.join(run_path, f"{checkpoint_name}_decoders.pth"),
     )
 

@@ -26,6 +26,9 @@ from model.color_decoder import ColorDecoder
 from dataset.input_dataset import InputDataset
 
 def run_shine_mapping_incremental():
+    torch.autograd.set_detect_anomaly(True)
+    torch.set_printoptions(sci_mode=False, precision = 10)
+
 
     config = SHINEConfig()
     if len(sys.argv) > 1:
@@ -59,8 +62,11 @@ def run_shine_mapping_incremental():
             octree = loaded_model["feature_octree"]
             octree.print_detail()
 
+    camera2lidar_matrix = config.camera_ext_matrix
+    lidar2camera_matrix = nn.Parameter(torch.tensor(np.linalg.inv(camera2lidar_matrix), dtype=config.dtype, device="cuda", requires_grad=True))
+    # lidar2camera_matrix.retain_grad()
     # dataset
-    dataset = InputDataset(config, sdf_octree, color_octree)
+    dataset = InputDataset(config, sdf_octree, color_octree, lidar2camera_matrix)
 
     # mesh reconstructor
     mesher = Mesher(config, sdf_octree, color_octree, sdf_mlp, color_mlp, None)
@@ -115,9 +121,11 @@ def run_shine_mapping_incremental():
         sdf_octree_feat = list(sdf_octree.parameters())
         color_octree_feat = list(color_octree.parameters())
         # 每帧都会设置一次optimizer，原因是每帧都会更新octree
-        opt = setup_optimizer(config, sdf_octree_feat, color_octree_feat, sdf_mlp_param, color_mlp_param, None, sigma_size)
+        opt = setup_optimizer(config, sdf_octree_feat, color_octree_feat, sdf_mlp_param, color_mlp_param,
+                               None, sigma_size, lidar2camera_matrix)
         sdf_octree.print_detail()
         color_octree.print_detail()
+        lidar2camera_matrix_backup = lidar2camera_matrix.detach().clone()
 
         T1 = get_time()
 
@@ -212,7 +220,7 @@ def run_shine_mapping_incremental():
             
 
             opt.zero_grad(set_to_none=True)
-            cur_loss.backward() # this is the slowest part (about 10x the forward time)
+            cur_loss.backward(retain_graph=True) # this is the slowest part (about 10x the forward time)
             opt.step()
 
             total_iter += 1
@@ -232,11 +240,20 @@ def run_shine_mapping_incremental():
             # 算regularization loss的时候用到了
             cal_feature_importance(dataset, sdf_octree, color_octree, sdf_mlp, color_mlp, sigma_sigmoid, config.bs, \
                 config.cal_importance_weight_down_rate, config.loss_reduction, sigma_size=sigma_size)
+            
+        print("lidar2camera_matrix's change (percent): ")
+        l2c_change = ((lidar2camera_matrix - lidar2camera_matrix_backup) / lidar2camera_matrix_backup) * 100
+        l2c_change[3,:3] = lidar2camera_matrix[3, :3] - lidar2camera_matrix_backup[3, :3]
+        print(l2c_change)
+
+        print("lidar2camera_matrix:")
+        print(lidar2camera_matrix)
+
 
         T2 = get_time()
         
         # reconstruction by marching cubes
-        if processed_frame == 0 or (processed_frame+1) % config.mesh_freq_frame == 0:
+        if processed_frame == 0 or frame_id == config.end_frame or (processed_frame+1) % config.mesh_freq_frame == 0:
             print("Begin mesh reconstruction from the implicit map")       
             vis_mesh = True 
             # print("Begin reconstruction from implicit mapn")               
@@ -277,6 +294,13 @@ def run_shine_mapping_incremental():
         if config.wandb_vis_on:
             wandb_log_content = {'frame': processed_frame, 'timing(s)/preprocess': T1-T0, 'timing(s)/mapping': T2-T1, 'timing(s)/reconstruct': T3-T2} 
             wandb.log(wandb_log_content)
+
+        # save checkpoint model
+        if ((processed_frame+1) % config.save_freq_frame == 0 or frame_id == config.end_frame) and processed_frame > 0:
+            checkpoint_name = 'model/model_frame_' + str(frame_id+1)
+            # octree.clear_temp()
+            save_checkpoint(sdf_octree, color_octree, sdf_mlp, color_mlp, opt, run_path, checkpoint_name, frame_id + 1)
+            save_decoder(sdf_mlp, color_mlp, run_path, checkpoint_name) # save both the gro and sem decoders
 
         processed_frame += 1
     

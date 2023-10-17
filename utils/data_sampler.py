@@ -38,8 +38,10 @@ class dataSampler():
 
         # get sample points
         # 减去sensor_origin_torch也就是pose中的平移部分是为了把点云移动到原点附近，方便计算点云中点到雷达的距离(直接算点到原点距离就行)
-        shift_points = points_torch - sensor_origin_torch
+        sensor_origin_torch_tmp = sensor_origin_torch.detach()
+        shift_points = points_torch - sensor_origin_torch_tmp
         point_num = shift_points.shape[0]
+        # shift_points_tmp = shift_points.detach()
         distances = torch.linalg.norm(shift_points, dim=1, keepdim=True) # ray distances (scaled), 实际上这里的distances就是点到lidar的距离(点的坐标都已经归一化到[-1,1]区间内)
         
         # Part 1. close-to-surface uniform sampling 
