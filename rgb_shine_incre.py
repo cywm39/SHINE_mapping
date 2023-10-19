@@ -260,7 +260,7 @@ def run_shine_mapping_incremental():
             mesh_path = run_path + '/mesh/mesh_frame_' + str(frame_id+1) + ".ply"
             map_path = run_path + '/map/sdf_map_frame_' + str(frame_id+1) + ".ply"
             if config.mc_with_octree: # default
-                cur_mesh = mesher.recon_octree_mesh(config.mc_query_level, config.mc_res_m, mesh_path, map_path, config.save_map, config.semantic_on)
+                cur_mesh = mesher.recon_octree_mesh(config.mc_query_level, config.mc_res_m, mesh_path, config.semantic_on)
             else:
                 if config.mc_local: # only build the local mesh to speed up
                     cur_mesh = mesher.recon_bbx_mesh(dataset.cur_bbx, config.mc_res_m, mesh_path, map_path, config.save_map, config.semantic_on)

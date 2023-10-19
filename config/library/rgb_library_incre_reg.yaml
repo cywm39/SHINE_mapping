@@ -46,6 +46,7 @@ octree:
   leaf_vox_size: 0.1 #default: 0.2
   tree_level_world: 12
   tree_level_feat: 3 # default: 3
+  color_tree_level_feat: 3
   feature_dim: 32 # default: 8
   poly_int_on: True
   octree_from_surface_samples: True
@@ -75,12 +76,14 @@ optimizer:
   iters: 50  # iterations per frame. default value is 50.
   batch_size: 4096
   learning_rate: 0.01
+  calibration_lr: 0.00001
   weight_decay: 1e-7 # l2 regularization
 eval:
   wandb_vis_on: True # log to wandb or not. default: False
   o3d_vis_on: True # visualize the mapping or not
   vis_freq_iters: 0 
   save_freq_iters: 1000 # save the model and octree every x iterations
+  save_freq_frame: 1000 # save the model and octree every x frames
   mesh_freq_frame: 20 # reconstruct the mesh every x frames
   mc_res_m: 0.1 # reconstruction marching cubes resolution. default: 0.1
   mc_with_octree: True # querying sdf only in certain levels of the octree

@@ -17,6 +17,12 @@ import json
 import open3d as o3d
 
 from utils.config import SHINEConfig
+from model.color_decoder import ColorDecoder
+from model.sdf_decoder import SDFDecoder
+from model.feature_octree import FeatureOctree
+from mesher import Mesher
+from utils.pose import read_poses_file
+from natsort import natsorted 
 
 
 # setup this run
@@ -272,3 +278,158 @@ def write_to_json(filename: Path, content: dict):
     assert filename.suffix == ".json"
     with open(filename, "w", encoding="UTF-8") as file:
         json.dump(content, file)
+
+def preprocess_kitti(points, z_th=-3.0, min_range=2.5):
+    # filter the outliers
+    # 去掉z轴值小于z_th的点，以及和原点间距离小于min_range的点
+    z = points[:, 2]
+    points = points[z > z_th]
+    points = points[np.linalg.norm(points, axis=1) >= min_range]
+    return points
+
+def read_point_cloud(filename: str):
+    # read point cloud from either (*.ply, *.pcd) or (kitti *.bin) format
+    if ".bin" in filename:
+        points = np.fromfile(filename, dtype=np.float32).reshape((-1, 4))[:, :3].astype(np.float64)
+    elif ".ply" in filename or ".pcd" in filename:
+        pc_load = o3d.io.read_point_cloud(filename)
+        points = np.asarray(pc_load.points, dtype=np.float64)
+    else:
+        sys.exit(
+            "The format of the imported point cloud is wrong (support only *pcd, *ply and *bin)"
+        )
+    preprocessed_points = preprocess_kitti(
+        points, -10.0, 1.5
+    )
+    pc_out = o3d.geometry.PointCloud()
+    pc_out.points = o3d.utility.Vector3dVector(preprocessed_points) # Vector3dVector is faster for np.float64 
+    return pc_out
+
+
+def load_model_and_recon_octree_mesh(config_file_path: str, load_model_path: str,
+                                     mesh_path: str):
+    config = SHINEConfig()
+    config.load(config_file_path)
+    sdf_octree = FeatureOctree(config, is_color=False)
+    color_octree = FeatureOctree(config, is_color=True)
+    sdf_mlp = SDFDecoder(config)
+    color_mlp = ColorDecoder(config)
+
+    loaded_model = torch.load(load_model_path)
+    sdf_mlp.load_state_dict(loaded_model["sdf_decoder"])
+    color_mlp.load_state_dict(loaded_model["color_decoder"])
+    if 'sdf_octree' in loaded_model.keys(): # also load the feature octree  
+        sdf_octree = loaded_model["sdf_octree"]
+        sdf_octree.print_detail()
+
+    if 'color_octree' in loaded_model.keys(): # also load the feature octree  
+        color_octree = loaded_model["color_octree"]
+        color_octree.print_detail()
+
+    mesher = Mesher(config, sdf_octree, color_octree, sdf_mlp, color_mlp, None)
+    begin_pose_inv = np.eye(4)
+    mesher.global_transform = np.linalg.inv(begin_pose_inv)
+
+    #  # visualize the octree (it is a bit slow and memory intensive for the visualization)
+    # vis_octree = True
+    # if vis_octree: 
+    #     vis_list = [] # create a list of bbx for the octree nodes
+    #     for l in range(config.tree_level_feat):
+    #         nodes_coord = sdf_octree.get_octree_nodes(config.tree_level_world-l)/config.scale
+    #         box_size = np.ones(3) * config.leaf_vox_size * (2**l)
+    #         for node_coord in nodes_coord:
+    #             node_box = o3d.geometry.AxisAlignedBoundingBox(node_coord-0.5*box_size, node_coord+0.5*box_size)
+    #             node_box.color = random_color_table[l]
+    #             vis_list.append(node_box)
+    #     o3d.visualization.draw_geometries(vis_list)
+    cur_mesh = mesher.recon_octree_mesh(config.mc_query_level, config.mc_res_m, mesh_path, config.semantic_on, False)
+
+def load_model_and_recon_bbx_mesh(config_file_path: str, load_model_path: str,
+                                     mesh_path: str, map_path: str, lidar2camera_matrix):
+    config = SHINEConfig()
+    config.load(config_file_path)
+    sdf_octree = FeatureOctree(config, is_color=False)
+    color_octree = FeatureOctree(config, is_color=True)
+    sdf_mlp = SDFDecoder(config)
+    color_mlp = ColorDecoder(config)
+
+    loaded_model = torch.load(load_model_path)
+    sdf_mlp.load_state_dict(loaded_model["sdf_decoder"])
+    color_mlp.load_state_dict(loaded_model["color_decoder"])
+    if 'sdf_octree' in loaded_model.keys(): # also load the feature octree  
+        sdf_octree = loaded_model["sdf_octree"]
+        sdf_octree.print_detail()
+
+    if 'color_octree' in loaded_model.keys(): # also load the feature octree  
+        color_octree = loaded_model["color_octree"]
+        color_octree.print_detail()
+
+    mesher = Mesher(config, sdf_octree, color_octree, sdf_mlp, color_mlp, None)
+    begin_pose_inv = np.eye(4)
+    mesher.global_transform = np.linalg.inv(begin_pose_inv)
+
+    map_down_pc = o3d.geometry.PointCloud()
+    map_bbx = o3d.geometry.AxisAlignedBoundingBox()
+
+    calib = {}
+    calib['Tr'] = np.eye(4)
+    poses = read_poses_file(config.pose_path, calib)
+
+    pc_filenames = natsorted(os.listdir(config.pc_path))
+    pose_index = 0
+    pc_radius = config.pc_radius
+    min_z = config.min_z
+    max_z = config.max_z
+    vox_down_m = config.vox_down_m
+
+    for filename in pc_filenames:
+        frame_path = os.path.join(config.pc_path, filename)
+        frame_pc = read_point_cloud(frame_path)
+
+
+        bbx_min = np.array([-pc_radius, -pc_radius, min_z])
+        bbx_max = np.array([pc_radius, pc_radius, max_z])
+        bbx = o3d.geometry.AxisAlignedBoundingBox(bbx_min, bbx_max)
+        frame_pc = frame_pc.crop(bbx)
+
+        frame_pc = frame_pc.voxel_down_sample(voxel_size=vox_down_m)
+        
+        lidar2camera_matrix_tmp = lidar2camera_matrix
+        # lidar2camera_matrix_tmp.requires_grad = False
+        # 去掉不能映射到相机图片中的点
+        # 将点从雷达坐标系转到相机坐标系
+        frame_pc_points = np.asarray(frame_pc.points, dtype=np.float64)
+        points3d_lidar = np.asarray(frame_pc.points, dtype=np.float64)
+        # points3d_lidar = frame_pc.clone()
+        points3d_lidar = np.insert(points3d_lidar, 3, 1, axis=1)
+        points3d_camera = lidar2camera_matrix_tmp @ points3d_lidar.T
+        H, W, fx, fy, cx, cy, = config.H, config.W, config.fx, config.fy, config.cx, config.cy
+        K = np.array([[fx, .0, cx, .0], [.0, fy, cy, .0], [.0, .0, 1.0, .0]]).reshape(3, 4)
+        # 过滤掉相机坐标系内位于相机之后的点
+        tmp_mask = points3d_camera[2, :] > 0.0
+        points3d_camera = points3d_camera[:, tmp_mask]
+        frame_pc_points = frame_pc_points[tmp_mask]
+        # 从相机坐标系映射到uv平面坐标
+        points2d_camera = K @ points3d_camera
+        points2d_camera = (points2d_camera[:2, :] / points2d_camera[2, :]).T # 操作之后points2d_camera维度:[n, 2]
+        # 过滤掉uv平面坐标内在图像外的点
+        # TODO points2d_camera[:, 1]是否真的对应H? 以及下面的frame_image[points2d_camera[:,1].astype(int), points2d_camera[:,0]行和列是否正确?
+        tmp_mask = np.logical_and(
+            (points2d_camera[:, 1] < H) & (points2d_camera[:, 1] > 0),
+            (points2d_camera[:, 0] < W) & (points2d_camera[:, 0] > 0)
+        )
+        points2d_camera = points2d_camera[tmp_mask]
+        # points3d_camera = (points3d_camera.T)[tmp_mask] # 操作之后points3d_camera维度: [n, 4]
+        frame_pc_points = frame_pc_points[tmp_mask]
+        frame_pc.points = o3d.utility.Vector3dVector(frame_pc_points)
+
+        frame_pc = frame_pc.transform(poses[pose_index])
+        frame_pc = frame_pc.voxel_down_sample(voxel_size=config.map_vox_down_m)
+        map_down_pc += frame_pc
+
+        pose_index += 1
+
+    map_bbx = map_down_pc.get_axis_aligned_bounding_box()
+
+    cur_mesh = mesher.recon_bbx_mesh(map_bbx, config.mc_res_m, mesh_path, map_path, config.save_map, config.semantic_on)
+

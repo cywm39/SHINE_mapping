@@ -3,6 +3,7 @@ import cv2
 import open3d as o3d
 import numpy as np
 import os
+import trimesh
 from natsort import natsorted 
 from utils.pose import read_poses_file
 import sys
@@ -10,6 +11,15 @@ import torch
 import torch.nn as nn
 from torch import optim
 from tqdm import tqdm
+from model.feature_octree import FeatureOctree
+from utils.config import SHINEConfig
+from utils.visualizer import MapVisualizer, random_color_table
+from model.color_decoder import ColorDecoder
+from model.sdf_decoder import SDFDecoder
+from utils.mesher import Mesher
+from utils.tools import *
+# import matplotlib.pyplot as plt
+
 
 def preprocess_kitti(points, z_th=-3.0, min_range=2.5):
     # filter the outliers
@@ -36,6 +46,26 @@ def read_point_cloud(filename: str):
     pc_out = o3d.geometry.PointCloud()
     pc_out.points = o3d.utility.Vector3dVector(preprocessed_points) # Vector3dVector is faster for np.float64 
     return pc_out
+
+def get_rays(H, W, fx, fy, cx, cy, c2w, device):
+    """
+    Get rays for a whole image.
+
+    """
+    if isinstance(c2w, np.ndarray):
+        c2w = torch.from_numpy(c2w)
+    # pytorch's meshgrid has indexing='ij'
+    i, j = torch.meshgrid(torch.linspace(0, W-1, W), torch.linspace(0, H-1, H))
+    i = i.t()  # transpose
+    j = j.t()
+    dirs = torch.stack(
+        [(i-cx)/fx, -(j-cy)/fy, -torch.ones_like(i)], -1).to(device)
+    dirs = dirs.reshape(H, W, 1, 3)
+    # Rotate ray directions from camera frame to the world frame
+    # dot product, equals to: [c2w.dot(dir) for dir in dirs]
+    rays_d = torch.sum(dirs * c2w[:3, :3], -1)
+    rays_o = c2w[:3, -1].expand(rays_d.shape)
+    return rays_o, rays_d
 
 
 # if __name__ == "__main__":
@@ -140,101 +170,101 @@ def read_point_cloud(filename: str):
 
 
 # 点云映射到图片上
-if __name__ == "__main__":
-    pc_path = "/home/cy/NeRF/shine_mapping_input/whole_map_wo_pose"
-    pose_file_path = "/home/cy/NeRF/shine_mapping_input/Lidar_pose_kitti.txt"
-    image_path = "/home/cy/NeRF/shine_mapping_input/image/resized_rgb"
-    output_image_folder_path = "/home/cy/NeRF/shine_mapping_input/pc2image_whole_map4/"
+# if __name__ == "__main__":
+#     pc_path = "/home/cy/NeRF/shine_mapping_input/whole_map_wo_pose"
+#     pose_file_path = "/home/cy/NeRF/shine_mapping_input/Lidar_pose_kitti.txt"
+#     image_path = "/home/cy/NeRF/shine_mapping_input/image/resized_rgb"
+#     output_image_folder_path = "/home/cy/NeRF/shine_mapping_input/pc2image_whole_map4/"
 
-    camera2lidar_matrix = np.array([-0.00113207, -0.0158688, 0.999873, 0.050166,
-            -0.9999999,  -0.000486594, -0.00113994, 0.0474116,
-            0.000504622,  -0.999874,  -0.0158682, -0.0312415,
-            0, 0, 0, 1]).reshape(4, 4)
-    # lidar2camera_matrix = np.linalg.inv(camera2lidar_matrix)
-    lidar2camera_matrix = np.array([[    -0.0000002596,     -0.8758301735,     -0.0000002596,
-              0.0336565562],
-        [     0.0000002596,      0.0000002596,     -0.8757055402,
-             -0.0295539070],
-        [     0.8757054806,      0.0000002596,      0.0000002596,
-             -0.0338485502],
-        [     0.0000000000,      0.0000000000,      0.0000000000,
-              1.0165320635]])
+#     camera2lidar_matrix = np.array([-0.00113207, -0.0158688, 0.999873, 0.050166,
+#             -0.9999999,  -0.000486594, -0.00113994, 0.0474116,
+#             0.000504622,  -0.999874,  -0.0158682, -0.0312415,
+#             0, 0, 0, 1]).reshape(4, 4)
+#     # lidar2camera_matrix = np.linalg.inv(camera2lidar_matrix)
+#     lidar2camera_matrix = np.array([[    -0.0000002596,     -0.8758301735,     -0.0000002596,
+#               0.0336565562],
+#         [     0.0000002596,      0.0000002596,     -0.8757055402,
+#              -0.0295539070],
+#         [     0.8757054806,      0.0000002596,      0.0000002596,
+#              -0.0338485502],
+#         [     0.0000000000,      0.0000000000,      0.0000000000,
+#               1.0165320635]])
 
-    H, W, fx, fy, cx, cy, = 1024, 1280, 863.4241, 863.4171, 640.6808, 518.3392
+#     H, W, fx, fy, cx, cy, = 1024, 1280, 863.4241, 863.4171, 640.6808, 518.3392
 
-    distortion_coeffs = np.array([-0.1080, 0.1050, -1.2872e-04, 5.7923e-05, -0.0222])  #k1, k2, p1, p2, k3
-    camera_matrix = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float64)
+#     distortion_coeffs = np.array([-0.1080, 0.1050, -1.2872e-04, 5.7923e-05, -0.0222])  #k1, k2, p1, p2, k3
+#     camera_matrix = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float64)
 
-    calib = {}
-    calib['Tr'] = np.eye(4)
-    poses = read_poses_file(pose_file_path, calib)
+#     calib = {}
+#     calib['Tr'] = np.eye(4)
+#     poses = read_poses_file(pose_file_path, calib)
 
-    pc_filenames = natsorted(os.listdir(pc_path))
-    image_filenames = natsorted(os.listdir(image_path))
-    pose_index = 0
+#     pc_filenames = natsorted(os.listdir(pc_path))
+#     image_filenames = natsorted(os.listdir(image_path))
+#     pose_index = 0
 
-    for filename in pc_filenames:
-        print(filename)
-        frame_path = os.path.join(pc_path, filename)
-        frame_pc = read_point_cloud(frame_path)
+#     for filename in pc_filenames:
+#         print(filename)
+#         frame_path = os.path.join(pc_path, filename)
+#         frame_pc = read_point_cloud(frame_path)
 
-        bbx_min = np.array([-50.0, -50.0, -10.0])
-        bbx_max = np.array([50.0, 50.0, 30.0])
-        bbx = o3d.geometry.AxisAlignedBoundingBox(bbx_min, bbx_max)
-        frame_pc = frame_pc.crop(bbx)
+#         bbx_min = np.array([-50.0, -50.0, -10.0])
+#         bbx_max = np.array([50.0, 50.0, 30.0])
+#         bbx = o3d.geometry.AxisAlignedBoundingBox(bbx_min, bbx_max)
+#         frame_pc = frame_pc.crop(bbx)
 
-        frame_pc = frame_pc.voxel_down_sample(voxel_size=0.05)
+#         frame_pc = frame_pc.voxel_down_sample(voxel_size=0.05)
 
-        # 去掉不能映射到相机图片中的点
-        # 将点从雷达坐标系转到相机坐标系
-        # frame_pc_points = np.asarray(frame_pc.points, dtype=np.float64)
-        points3d_lidar = np.asarray(frame_pc.points, dtype=np.float64)
-        # points3d_lidar = frame_pc.clone()
-        points3d_lidar = np.insert(points3d_lidar, 3, 1, axis=1)
-        points3d_camera = lidar2camera_matrix @ points3d_lidar.T
-        H, W, fx, fy, cx, cy, = 1024, 1280, 863.4241, 863.4171, 640.6808, 518.3392
-        K = np.array([[fx, .0, cx, .0], [.0, fy, cy, .0], [.0, .0, 1.0, .0]]).reshape(3, 4)
-        # 过滤掉相机坐标系内位于相机之后的点
-        tmp_mask = points3d_camera[2, :] > 0.0
-        points3d_camera = points3d_camera[:, tmp_mask]
-        # frame_pc_points = frame_pc_points[tmp_mask]
-        # 从相机坐标系映射到uv平面坐标
-        points2d_camera = K @ points3d_camera
-        points2d_camera = (points2d_camera[:2, :] / points2d_camera[2, :]).T # 操作之后points2d_camera维度:[n, 2]
-        # 过滤掉uv平面坐标内在图像外的点
-        # TODO H change with W
-        tmp_mask = np.logical_and(
-            (points2d_camera[:, 1] < H) & (points2d_camera[:, 1] > 0),
-            (points2d_camera[:, 0] < W) & (points2d_camera[:, 0] > 0)
-        )
-        points2d_camera = points2d_camera[tmp_mask]
-        # points3d_camera = (points3d_camera.T)[tmp_mask] # 操作之后points3d_camera维度: [n, 4]
-        # frame_pc_points = frame_pc_points[tmp_mask]
-        # frame_pc.points = o3d.utility.Vector3dVector(frame_pc_points)
-        image_frame_path = os.path.join(image_path, image_filenames[pose_index])
-        frame_image = cv2.imread(image_frame_path)
-        # frame_image = cv2.undistort(frame_image, camera_matrix, distortion_coeffs)
+#         # 去掉不能映射到相机图片中的点
+#         # 将点从雷达坐标系转到相机坐标系
+#         # frame_pc_points = np.asarray(frame_pc.points, dtype=np.float64)
+#         points3d_lidar = np.asarray(frame_pc.points, dtype=np.float64)
+#         # points3d_lidar = frame_pc.clone()
+#         points3d_lidar = np.insert(points3d_lidar, 3, 1, axis=1)
+#         points3d_camera = lidar2camera_matrix @ points3d_lidar.T
+#         H, W, fx, fy, cx, cy, = 1024, 1280, 863.4241, 863.4171, 640.6808, 518.3392
+#         K = np.array([[fx, .0, cx, .0], [.0, fy, cy, .0], [.0, .0, 1.0, .0]]).reshape(3, 4)
+#         # 过滤掉相机坐标系内位于相机之后的点
+#         tmp_mask = points3d_camera[2, :] > 0.0
+#         points3d_camera = points3d_camera[:, tmp_mask]
+#         # frame_pc_points = frame_pc_points[tmp_mask]
+#         # 从相机坐标系映射到uv平面坐标
+#         points2d_camera = K @ points3d_camera
+#         points2d_camera = (points2d_camera[:2, :] / points2d_camera[2, :]).T # 操作之后points2d_camera维度:[n, 2]
+#         # 过滤掉uv平面坐标内在图像外的点
+#         # TODO H change with W
+#         tmp_mask = np.logical_and(
+#             (points2d_camera[:, 1] < H) & (points2d_camera[:, 1] > 0),
+#             (points2d_camera[:, 0] < W) & (points2d_camera[:, 0] > 0)
+#         )
+#         points2d_camera = points2d_camera[tmp_mask]
+#         # points3d_camera = (points3d_camera.T)[tmp_mask] # 操作之后points3d_camera维度: [n, 4]
+#         # frame_pc_points = frame_pc_points[tmp_mask]
+#         # frame_pc.points = o3d.utility.Vector3dVector(frame_pc_points)
+#         image_frame_path = os.path.join(image_path, image_filenames[pose_index])
+#         frame_image = cv2.imread(image_frame_path)
+#         # frame_image = cv2.undistort(frame_image, camera_matrix, distortion_coeffs)
 
-        white_image = np.ones((H, W, 3), dtype=np.uint8) * 255
+#         white_image = np.ones((H, W, 3), dtype=np.uint8) * 255
 
-        points_int = points2d_camera.astype(int)
-        pixel_colors = frame_image[points_int[:, 1], points_int[:, 0]]
-        white_image[points_int[:, 1], points_int[:, 0]] = pixel_colors
-        cv2.imwrite(output_image_folder_path + filename + ".png", white_image)
+#         points_int = points2d_camera.astype(int)
+#         pixel_colors = frame_image[points_int[:, 1], points_int[:, 0]]
+#         white_image[points_int[:, 1], points_int[:, 0]] = pixel_colors
+#         cv2.imwrite(output_image_folder_path + filename + ".png", white_image)
 
 
-        # points2d_camera = points2d_camera.astype(np.int32)
-        # # 将指定坐标处的像素点调整为白色
-        # for point in points2d_camera:
-        #     x, y = point  # 提取坐标
-        #     black_image[y, x] = [255, 255, 255]  # 设置像素点颜色为白色
-        # cv2.imwrite(output_image_folder_path + filename + ".png", black_image)
+#         # points2d_camera = points2d_camera.astype(np.int32)
+#         # # 将指定坐标处的像素点调整为白色
+#         # for point in points2d_camera:
+#         #     x, y = point  # 提取坐标
+#         #     black_image[y, x] = [255, 255, 255]  # 设置像素点颜色为白色
+#         # cv2.imwrite(output_image_folder_path + filename + ".png", black_image)
 
-        # frame_pose = poses[pose_index]
-        # frame_pose_inv = np.linalg.inv(frame_pose)
+#         # frame_pose = poses[pose_index]
+#         # frame_pose_inv = np.linalg.inv(frame_pose)
 
-        # total_pc += frame_pc.transform(frame_pose)
-        pose_index += 1
+#         # total_pc += frame_pc.transform(frame_pose)
+#         pose_index += 1
 
 
 
@@ -372,3 +402,59 @@ if __name__ == "__main__":
 #             # loss.backward()
 #             opt.step()
 
+
+# if __name__ == "__main__":
+#     mesh_tmp = o3d.io.read_triangle_mesh("/home/cy/Test/r3live_mesh_frame_863.ply")
+#     o3d.visualization.draw_geometries([mesh_tmp])
+#     mesh = o3d.t.geometry.TriangleMesh.from_legacy(mesh_tmp)
+#     print(type(mesh))
+#     # torus = o3d.geometry.TriangleMesh.create_torus().translate([0, 0, 2])
+#     # torus = o3d.t.geometry.TriangleMesh.from_legacy(torus)
+
+#     scene = o3d.t.geometry.RaycastingScene()
+#     scene.add_triangles(mesh)
+
+#     # c2w = torch.tensor([[-1.9808e-03, -1.0000e+00, 1.1601e-03, 7.0236e-03],
+#     #     [-1.3469e-02, -1.1334e-03, -9.9991e-01, -7.0353e-02],
+#     #     [9.9991e-01, -1.9963e-03, -1.3467e-02, -3.2179e-02],
+#     #     [0.0000e+00, 0.0000e+00, 0.0000e+00, 1.0000e+00]])
+#     # c2w = torch.tensor([9.999994249509230881e-01, -6.419753489684488969e-04, -8.590491688647965704e-04,-4.052349999999999702e-02,
+#     #                     6.440357145296518593e-04, 9.999969118786344868e-01, 2.400302312818621692e-03, -3.984349999999999697e-02,
+#     #                     8.575055811018025788e-04, -2.400854190872278061e-03, 9.999967502863859048e-01, 1.830839999999999898e-02,
+#     #                     0,0,0,1]).reshape(4,4)
+#     c2w = torch.tensor([6.095023248645019542e-01, 7.728227619515996016e-01, -1.767820539372378374e-01, 6.002030000000000420e-01,
+#                         -7.351278807392950254e-01, 6.344284017162953315e-01, 2.389301196070927058e-01, 2.378190000000000026e-01,
+#                         2.968061908797051673e-01, -1.567104671705508989e-02, 9.548091449867203151e-01, 1.501360000000000028e+00,
+#                         0,0,0,1]).reshape(4,4)
+
+#     H, W, fx, fy, cx, cy, = 1024, 1280, 863.4241, 863.4171, 640.6808, 518.3392
+
+#     rays_o, rays_d = get_rays(H, W, fx, fy, cx, cy, c2w, "cpu")
+#     # rays_d = rays_d * 10000
+#     rays = torch.cat([rays_o, rays_d], -1)
+
+#     print(rays.shape)
+
+#     rays = o3d.core.Tensor(rays.numpy())
+
+#     ans = scene.cast_rays(rays)
+
+#     hit = ans['t_hit'].isfinite()
+#     points = rays[hit][:,:3] + rays[hit][:,3:]*ans['t_hit'][hit].reshape((-1,1))
+#     print(type(points))
+#     point_cloud = o3d.geometry.PointCloud()
+#     point_cloud.points = o3d.utility.Vector3dVector(points.numpy())
+#     o3d.io.write_point_cloud("test.pcd", point_cloud)
+#     # plt.imsave("test.jpg",ans['t_hit'].numpy())
+#     # plt.imsave("test.jpg",np.abs(ans['primitive_normals'].numpy()))
+#     # plt.imsave("test.jpg", ans['geometry_ids'].numpy(), vmax=3)
+#     print("fin")
+
+#     # tmp = torch.zeros(100,3)
+#     # rays_o = rays_o.reshape(-1, 3)
+#     # rays_d = rays_d.reshape(-1, 3)
+#     # rays = torch.cat([rays_o, rays_d])
+#     # rays = torch.cat([rays, tmp])
+#     # point_cloud = o3d.geometry.PointCloud()
+#     # point_cloud.points = o3d.utility.Vector3dVector(rays.numpy())
+#     # o3d.io.write_point_cloud("test.pcd", point_cloud)

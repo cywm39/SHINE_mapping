@@ -314,7 +314,7 @@ class SHINEConfig:
 
         # color octree
         self.color_tree_level_world = self.tree_level_world # the total octree level, allocated for the whole space
-        self.color_tree_level_feat = self.tree_level_feat  # the octree levels with optimizable feature grid
+        self.color_tree_level_feat = config_args["octree"]["color_tree_level_feat"] # the octree levels with optimizable feature grid
         # start from the leaf level
         self.color_leaf_vox_size = self.leaf_vox_size # voxel size of the octree leaf nodes (unit: m)
         self.color_feature_dim = config_args["octree"]["color_feature_dim"] # length of the feature for each grid feature

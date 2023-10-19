@@ -314,17 +314,26 @@ class Mesher():
         # bbx and voxel_size all with unit m, in world coordinate system
 
         coord, voxel_num_xyz, voxel_origin = self.get_query_from_bbx(bbx, voxel_size)
-        sdf_pred, _, mc_mask = self.query_points(coord, self.config.infer_bs, True, False, self.config.mc_mask_on)
+        sdf_pred, _, mc_mask, _ = self.query_points(coord, self.config.infer_bs, True, False, self.config.mc_mask_on, False)
         if save_map:
             self.generate_sdf_map(coord, sdf_pred, mc_mask, map_path)
         mc_sdf, _, mc_mask = self.assign_to_bbx(sdf_pred, None, mc_mask, voxel_num_xyz)
         verts, faces = self.mc_mesh(mc_sdf, mc_mask, voxel_size, voxel_origin)
+
+        points = torch.tensor(verts, device=self.device)
+        # octree的查询只支持[-1,1]坐标系下，所以需要对真实世界下的顶点坐标进行缩放，乘以world_scale
+        points *= self.world_scale
+        _, _, _, color_pred = self.query_points(points, self.config.infer_bs, False, False, False, True)
+        vertex_colors = color_pred
+        vertex_colors = np.clip(vertex_colors, 0, 255)
+        vertex_colors /= 255.0
 
         # directly use open3d to get mesh
         mesh = o3d.geometry.TriangleMesh(
             o3d.utility.Vector3dVector(verts.astype(np.float64)),
             o3d.utility.Vector3iVector(faces)
         )
+        mesh.vertex_colors = o3d.utility.Vector3dVector(vertex_colors)
 
         if estimate_sem: 
             mesh = self.estimate_vertices_sem(mesh, verts, filter_free_space_vertices)
@@ -346,8 +355,8 @@ class Mesher():
 
     # reconstruct the map sparsely using the octree, only query the sdf at certain level ($query_level) of the octree
     # much faster and also memory-wise more efficient
-    def recon_octree_mesh(self, query_level, mc_res_m, mesh_path, map_path, \
-                          save_map = False, estimate_sem = False, estimate_normal = True, \
+    def recon_octree_mesh(self, query_level, mc_res_m, mesh_path, \
+                          estimate_sem = False, estimate_normal = True, \
                           filter_isolated_mesh = True, filter_free_space_vertices = True): 
 
         # query_level层的所有节点坐标，由于是从octree里直接得到所以是[-1,1]坐标系里的
