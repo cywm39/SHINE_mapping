@@ -458,3 +458,25 @@ def get_rays(H, W, fx, fy, cx, cy, c2w, device):
 #     # point_cloud = o3d.geometry.PointCloud()
 #     # point_cloud.points = o3d.utility.Vector3dVector(rays.numpy())
 #     # o3d.io.write_point_cloud("test.pcd", point_cloud)
+
+
+if __name__ == "__main__":
+    config = SHINEConfig()
+    config.load(config_file_path)
+    sdf_octree = FeatureOctree(config, is_color=False)
+    loaded_model = torch.load(load_model_path)
+    if 'sdf_octree' in loaded_model.keys(): # also load the feature octree  
+        sdf_octree = loaded_model["sdf_octree"]
+        sdf_octree.print_detail()
+    # visualize the octree (it is a bit slow and memory intensive for the visualization)
+    vis_octree = True
+    if vis_octree: 
+        vis_list = [] # create a list of bbx for the octree nodes
+        for l in range(config.tree_level_feat):
+            nodes_coord = sdf_octree.get_octree_nodes(config.tree_level_world-l)/config.scale
+            box_size = np.ones(3) * config.leaf_vox_size * (2**l)
+            for node_coord in nodes_coord:
+                node_box = o3d.geometry.AxisAlignedBoundingBox(node_coord-0.5*box_size, node_coord+0.5*box_size)
+                node_box.color = random_color_table[l]
+                vis_list.append(node_box)
+        o3d.visualization.draw_geometries(vis_list)
