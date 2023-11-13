@@ -844,10 +844,13 @@ def save_mesh(gsNetwork, gsRender, mesh_shape='./outs/gs_shape.obj', mesh_textur
             # rectify...
             w2c[1:3, :3] *= -1
             w2c[:3, 3] *= -1
-            self.world_view_transform = torch.tensor(w2c).transpose(0, 1).cuda()
-            self.projection_matrix = (getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FovX, fovY=self.FovY).transpose(0, 1).cuda())
+            # self.world_view_transform = torch.tensor(w2c).transpose(0, 1).cuda()
+            self.world_view_transform = torch.tensor(w2c).transpose(0, 1)
+            # self.projection_matrix = (getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FovX, fovY=self.FovY).transpose(0, 1).cuda())
+            self.projection_matrix = (getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FovX, fovY=self.FovY).transpose(0, 1))
             self.full_proj_transform = self.world_view_transform @ self.projection_matrix
-            self.camera_center = -torch.tensor(c2w[:3, 3]).cuda()
+            # self.camera_center = -torch.tensor(c2w[:3, 3]).cuda()
+            self.camera_center = -torch.tensor(c2w[:3, 3])
 
     def extract_mesh(gsNetwork, density_thresh, resolution=128, decimate_target=1e5):
         @torch.no_grad()
@@ -896,6 +899,7 @@ def save_mesh(gsNetwork, gsRender, mesh_shape='./outs/gs_shape.obj', mesh_textur
             stds = stds * scale
 
             covs = gsNetwork.covariance_activation(stds, 1, gsNetwork._rotation[mask])
+            covs = covs.to('cpu')
 
             # tile
             device = opacities.device
@@ -934,7 +938,8 @@ def save_mesh(gsNetwork, gsRender, mesh_shape='./outs/gs_shape.obj', mesh_textur
                         val = 0
                         for start in range(0, g_covs.shape[1], batch_g):
                             end = min(start + batch_g, g_covs.shape[1])
-                            w = gaussian_3d_coeff(g_pts[:, start:end].reshape(-1, 3), g_covs[:, start:end].reshape(-1, 6)).reshape(pts.shape[0], -1) # [M, l]
+                            w = gaussian_3d_coeff(g_pts[:, start:end].reshape(-1, 3), 
+                                                  g_covs[:, start:end].reshape(-1, 6)).reshape(pts.shape[0], -1) # [M, l]
                             val += (mask_opas[:, start:end] * w).sum(-1)
                         
                         # kiui.lo(val, mask_opas, w)
@@ -1057,11 +1062,14 @@ def save_mesh(gsNetwork, gsRender, mesh_shape='./outs/gs_shape.obj', mesh_textur
         if decimate_target > 0 and triangles.shape[0] > decimate_target:
             vertices, triangles = decimate_mesh( vertices, triangles, decimate_target)
 
-        v = torch.from_numpy(vertices.astype(np.float32)).contiguous().cuda()
-        f = torch.from_numpy(triangles.astype(np.int32)).contiguous().cuda()
+        # v = torch.from_numpy(vertices.astype(np.float32)).contiguous().cuda()
+        # f = torch.from_numpy(triangles.astype(np.int32)).contiguous().cuda()
+        v = torch.from_numpy(vertices.astype(np.float32)).contiguous()
+        f = torch.from_numpy(triangles.astype(np.int32)).contiguous()
 
         print(f"clean: {v.shape} ({v.min().item()}-{v.max().item()}), {f.shape}")
-        mesh = Mesh(v=v, f=f, device='cuda')
+        # mesh = Mesh(v=v, f=f, device='cuda')
+        mesh = Mesh(v=v, f=f, device='cpu')
         return mesh
 
     def orbit_camera(elevation, azimuth, radius=1, is_degree=True, target=None, opengl=True):  #elevation & azimuth to pose (cam2world) matrix
@@ -1114,8 +1122,10 @@ def save_mesh(gsNetwork, gsRender, mesh_shape='./outs/gs_shape.obj', mesh_textur
     mesh.auto_uv()
     mesh.auto_normal()
 
-    albedo = torch.zeros((h, w, 3), device='cuda', dtype=torch.float32)
-    cnt = torch.zeros((h, w, 1), device='cuda', dtype=torch.float32)
+    # albedo = torch.zeros((h, w, 3), device='cuda', dtype=torch.float32)
+    # cnt = torch.zeros((h, w, 1), device='cuda', dtype=torch.float32)
+    albedo = torch.zeros((h, w, 3), device='cpu', dtype=torch.float32)
+    cnt = torch.zeros((h, w, 1), device='cpu', dtype=torch.float32)
 
     # self.prepare_train() # tmp fix for not loading 0123
     # vers = [0]
@@ -1133,14 +1143,15 @@ def save_mesh(gsNetwork, gsRender, mesh_shape='./outs/gs_shape.obj', mesh_textur
     else:
         glctx = dr.RasterizeCudaContext()
 
-    W = 800
-    H = 800
+    W = 1280
+    H = 1024
     radius = 2
-    fovy = 49.1
+    fovy = 1.0704951061753438
     cam = OrbitCamera(w, H, r=radius, fovy=fovy)
 
     white_background = False
     background = torch.tensor([[0, 0, 0],[1, 1, 1]][white_background]).float().to('cuda')
+    gsNetwork.move2cuda()
 
     for ver, hor in zip(vers, hors):
         # render image
@@ -1149,6 +1160,7 @@ def save_mesh(gsNetwork, gsRender, mesh_shape='./outs/gs_shape.obj', mesh_textur
         cur_cam = MiniCam(pose, render_resolution, render_resolution, cam.fovy, cam.fovx, cam.near, cam.far)
         
         image, viewspace_point_tensor, radii,visibility_filter = gsRender.render(cur_cam, gsNetwork, background, device='cuda')
+        image = image.to("cpu")
 
         rgbs = image.unsqueeze(0) # [1, 3, H, W] in [0, 1]
 
@@ -1159,8 +1171,10 @@ def save_mesh(gsNetwork, gsRender, mesh_shape='./outs/gs_shape.obj', mesh_textur
             # kiui.vis.plot_image(rgbs)
             
         # get coordinate in texture image
-        pose = torch.from_numpy(pose.astype(np.float32)).to('cuda')
-        proj = torch.from_numpy(cam.perspective.astype(np.float32)).to('cuda')
+        # pose = torch.from_numpy(pose.astype(np.float32)).to('cuda')
+        # proj = torch.from_numpy(cam.perspective.astype(np.float32)).to('cuda')
+        pose = torch.from_numpy(pose.astype(np.float32)).to('cpu')
+        proj = torch.from_numpy(cam.perspective.astype(np.float32)).to('cpu')
 
         v_cam = torch.matmul(torch.nn.functional.pad(mesh.v, pad=(0, 1), mode='constant', value=1.0), torch.inverse(pose).T).float().unsqueeze(0)
         v_clip = v_cam @ proj.T
@@ -1229,7 +1243,8 @@ def save_mesh(gsNetwork, gsRender, mesh_shape='./outs/gs_shape.obj', mesh_textur
 
     albedo[tuple(inpaint_coords.T)] = albedo[tuple(search_coords[indices[:, 0]].T)]
 
-    mesh.albedo = torch.from_numpy(albedo).to('cuda')
+    # mesh.albedo = torch.from_numpy(albedo).to('cuda')
+    mesh.albedo = torch.from_numpy(albedo).to('cpu')
     os.makedirs(os.path.dirname(mesh_texture), exist_ok=True)
     mesh.write(mesh_texture)
 

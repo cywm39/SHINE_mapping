@@ -1,0 +1,4 @@
+# ninja log v5
+1	13129	1698560581365683618	/home/cy/NeRF/SHINE_mapping/submodules/simple-knn/build/temp.linux-x86_64-cpython-37/simple_knn.o	380dbf9453b1fc09
+1	18596	1698560586825694440	/home/cy/NeRF/SHINE_mapping/submodules/simple-knn/build/temp.linux-x86_64-cpython-37/ext.o	4bf9d6c5c466d51e
+1	41936	1698560610173738797	/home/cy/NeRF/SHINE_mapping/submodules/simple-knn/build/temp.linux-x86_64-cpython-37/spatial.o	f49004f7de418241

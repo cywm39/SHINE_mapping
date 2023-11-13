@@ -1,0 +1,20 @@
+pose_file_path: "/home/wuchenyang/NeRF/shine_mapping_input/camera_pose_kitti_200frames.txt"
+image_folder_path: "/home/wuchenyang/NeRF/shine_mapping_input/image/resized_rgb_frame200"
+pc_path: "/home/wuchenyang/NeRF/shine_mapping_input/merged_cloud_200frame.pcd"
+spatial_lr_scale: 1.0
+position_lr_max_steps: 1000
+device: "cuda"
+name: ""
+output_root: "./gaussian_outs/"
+xyz_lr: 0.00016
+f_dc_lr: 0.0025
+f_rest_lr: 0.000125
+opacity_lr: 0.05
+scaling_lr: 0.005
+rotation_lr: 0.001
+
+densify_grad_threshold: 0.0002
+
+lambda_dssim: 0.2
+white_background: False
+out_result_iter: 100

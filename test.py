@@ -458,3 +458,23 @@ def get_rays(H, W, fx, fy, cx, cy, c2w, device):
 #     # point_cloud = o3d.geometry.PointCloud()
 #     # point_cloud.points = o3d.utility.Vector3dVector(rays.numpy())
 #     # o3d.io.write_point_cloud("test.pcd", point_cloud)
+
+
+if __name__ == "__main__":
+    pc_folder_path = "/home/cy/NeRF/shine_mapping_input/Map_pointcloud_with_pose"
+    output_path = "/home/cy/NeRF/shine_mapping_input/merged_cloud_200frame.pcd"
+
+    pc_filenames = natsorted(os.listdir(pc_folder_path))
+
+    index = 0
+    total_pc = o3d.geometry.PointCloud()
+
+    for filename in pc_filenames:
+        if index == 200:
+            break
+        frame_path = os.path.join(pc_folder_path, filename)
+        source_pc = o3d.io.read_point_cloud(frame_path)
+        total_pc += source_pc
+        index += 1
+
+    o3d.io.write_point_cloud(output_path, total_pc)

@@ -5,6 +5,11 @@ import random
 import numpy as np
 import torchvision
 import open3d as o3d
+import getpass
+import wandb
+import shutil
+import time
+from datetime import datetime
 from natsort import natsorted 
 from utils.pose import read_poses_file
 from PIL import Image
@@ -14,9 +19,13 @@ import torch.nn as nn
 from simple_knn._C import distCUDA2
 from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
 from utils import ms
+from utils.gaussian_config import Gaussian_config
+
+img2mse = lambda x, y : torch.mean((x - y) ** 2)
+mse2psnr = lambda x : -10. * torch.log(x) / torch.log(10 * torch.ones(1, device='cuda'))
 
 class GsDataset:
-    def __init__(self, device, resolution=(256,256)):
+    def __init__(self, device, resolution=(256,256), pose_file_path='', image_folder_path=''):
         def getWorld2View2(R, t, translate=np.array([.0, .0, .0]), scale=1.0):
             Rt = np.zeros((4, 4))
             Rt[:3, :3] = R.transpose()
@@ -29,7 +38,7 @@ class GsDataset:
             Rt = np.linalg.inv(C2W)
             return np.float32(Rt)
 
-        def load_image_camera_from_transforms(device, resolution, white_background=False):
+        def load_image_camera_from_transforms(device, resolution, white_background=False, pose_file_path='', image_folder_path=''):
             class Camera:
                 def __init__(self, device, uid, image_data, image_path, image_name, image_width, image_height, R, t, FovX, FovY, 
                              znear=0.01, zfar=100.0, trans=np.array([0.0, 0.0, 0.0]), scale=1.0):
@@ -54,7 +63,7 @@ class GsDataset:
                     # 每帧camera的各种参数
                     self.uid = uid
                     image_data = torch.from_numpy(np.array(image_data)) / 255.0
-                    self.image_goal = image_data.clone().clamp(0.0, 1.0).permute(2, 0, 1).to(device)
+                    self.image_goal = image_data.clone().clamp(0.0, 1.0).permute(2, 0, 1) #.to(device)
                     self.image_tidy = image_data.permute(2, 0, 1) if len(image_data.shape) == 3 else image_data.unsqueeze(dim=-1).permute(2, 0, 1)
                     self.image_path = image_path
                     self.image_name = image_name
@@ -80,8 +89,6 @@ class GsDataset:
             def focal2fov(focal, pixels):
                 return 2*math.atan(pixels/(2*focal))
 
-            pose_file_path = ''
-            image_folder_path = ''
             image_camera = []
 
             calib = {}
@@ -104,6 +111,7 @@ class GsDataset:
                 w2c = np.linalg.inv(c2w)  #get the world-to-camera transform and set R, T
                 R,t = np.transpose(w2c[:3,:3]), w2c[:3, 3]  # R is stored transposed due to 'glm' in CUDA code
                 fovy = focal2fov(fov2focal(fovx, image_data.size[0]), image_data.size[1])
+                # print('fovy: ' + str(fovy))
                 camera = Camera(device=device, uid=pose_index, image_data=image_data, image_path=image_path, image_name=os.path.basename(image_path), 
                                 image_width=image_data.size[0], image_height=image_data.size[1], R=R, t=t, FovX=fovx, FovY=fovy)
                 image_camera.append(camera)
@@ -148,20 +156,20 @@ class GsDataset:
             return {"translate": translate, "radius": radius}
 
         # 读取每一帧的各种相机参数，返回一个list
-        self.image_camera = load_image_camera_from_transforms(device, resolution)
+        self.image_camera = load_image_camera_from_transforms(device, resolution, 
+                                                              pose_file_path=pose_file_path, image_folder_path=image_folder_path)
         # radius的定义：对所有帧的相机中心点坐标求平均值得到相机路径的几何中心，所有帧的相机中心点坐标和几何中心距离最远的那个距离*1.1就是radius
         self.cameras_extent = getNerfppNorm(self.image_camera)["radius"]
 
 class GsNetwork:
-    def __init__(self, device, percent_dense=0.01, max_sh_degree=3, point_number=100000):
+    def __init__(self, device, percent_dense=0.01, max_sh_degree=3, point_number=100000, pc_path = ''):
         self.percent_dense = percent_dense
         self.max_sh_degree, self.now_sh_degree = max_sh_degree, 0  #spherical-harmonics
 
-        pc_path = ''
         pc_load = o3d.io.read_point_cloud(pc_path)
         pc_points = np.asarray(pc_load.points, dtype=np.float64)
         point_number = pc_points.shape[0]
-        points = torch.tensor(pc_points, device=device)
+        points = torch.tensor(pc_points, device=device).float()
         
         # [-1.3, 1.3]范围
         # points = torch.rand(point_number, 3).float().to(device) * 2.6 - 1.3  #normals=torch.zeros(point_number, 3)
@@ -239,6 +247,28 @@ class GsNetwork:
         self.max_radii2D = torch.zeros((point_number)).float().to(device)
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device=device)
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device=device)
+
+    def move2cpu(self):
+        self._xyz = self._xyz.to("cpu")
+        self._features_dc = self._features_dc.to('cpu')
+        self._features_rest = self._features_rest.to('cpu')
+        self._scaling = self._scaling.to('cpu')
+        self._rotation = self._rotation.to('cpu')
+        self._opacity = self._opacity.to('cpu')
+        self.max_radii2D = self.max_radii2D.to('cpu')
+        self.xyz_gradient_accum = self.xyz_gradient_accum.to('cpu')
+        self.denom = self.denom.to('cpu')
+
+    def move2cuda(self):
+        self._xyz = self._xyz.to("cuda")
+        self._features_dc = self._features_dc.to('cuda')
+        self._features_rest = self._features_rest.to('cuda')
+        self._scaling = self._scaling.to('cuda')
+        self._rotation = self._rotation.to('cuda')
+        self._opacity = self._opacity.to('cuda')
+        self.max_radii2D = self.max_radii2D.to('cuda')
+        self.xyz_gradient_accum = self.xyz_gradient_accum.to('cuda')
+        self.denom = self.denom.to('cuda')
 
     def oneupSHdegree(self):
         if self.now_sh_degree < self.max_sh_degree:
@@ -461,8 +491,30 @@ class GsRender:
                                            cov3D_precomp=cov3D_precomp)  #rasterize visible Gaussians to image, obtain their radii (on screen). 
         return rendered_image, screenspace_points, radii, radii>0 #Those Gaussians that were frustum culled or had a radius of 0 were not visible. They will be excluded from value updates used in the splitting criteria.
 
-def main(spatial_lr_scale=1.0, position_lr_max_steps=1000*10, device=['cpu','cuda'][torch.cuda.is_available()]):
-    def update_learning_rate(optimizer, iteration, position_lr_max_steps):
+def setup_wandb():
+    print("Weight & Bias logging option is on.")
+    username = getpass.getuser()
+    # print(username)
+    wandb_key_path = username + "_wandb.key"
+    if not os.path.exists(wandb_key_path):
+        wandb_key = input(
+            "[You need to firstly setup and login wandb] Please enter your wandb key (https://wandb.ai/authorize):"
+        )
+        with open(wandb_key_path, "w") as fh:
+            fh.write(wandb_key)
+    else:
+        print("wandb key already set")
+    os.system('export WANDB_API_KEY=$(cat "' + wandb_key_path + '")')
+
+def get_time():
+    """
+    :return: get timing statistics
+    """
+    torch.cuda.synchronize()
+    return time.time()
+
+def main():
+    def update_learning_rate(optimizer, iteration, position_lr_max_steps, spatial_lr_scale):
         def expon_lr(step, lr_init, lr_final, lr_delay_steps, lr_delay_mult, max_steps):
             if step < 0 or (lr_init == 0.0 and lr_final == 0.0):
                 return 0.0
@@ -476,13 +528,47 @@ def main(spatial_lr_scale=1.0, position_lr_max_steps=1000*10, device=['cpu','cud
 
         for param_group in optimizer.param_groups:
             if param_group["name"] == "xyz":
-                lr = expon_lr(step=iteration, lr_init=0.00016*spatial_lr_scale, lr_final=0.0000016*spatial_lr_scale, lr_delay_steps=0, lr_delay_mult=0.01, max_steps=position_lr_max_steps)
+                lr = expon_lr(step=iteration, lr_init=0.00016*spatial_lr_scale, lr_final=0.0000016*spatial_lr_scale, 
+                              lr_delay_steps=0, lr_delay_mult=0.01, max_steps=position_lr_max_steps)
                 param_group['lr'] = lr
                 return lr
+            
+    config_file_path = ''
+    config = Gaussian_config()
+    config.load(config_file_path)
 
-    gsDataset = GsDataset(device=device)
-    gsNetwork = GsNetwork(device=device)
+    spatial_lr_scale = config.spatial_lr_scale
+    position_lr_max_steps = config.position_lr_max_steps
+    device = config.device
+
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")  # begining timestamp
+    run_name = config.name + "_" + ts
+    run_path = os.path.join(config.output_root, run_name)
+    access = 0o755
+    os.makedirs(run_path, access, exist_ok=True)
+    assert os.access(run_path, os.W_OK)
+    print(f"Start {run_path}")
+
+    mesh_path = os.path.join(run_path, "mesh")
+    image_path = os.path.join(run_path, "image")
+    model_path = os.path.join(run_path, "model")
+    os.makedirs(mesh_path, access, exist_ok=True)
+    os.makedirs(image_path, access, exist_ok=True)
+    os.makedirs(model_path, access, exist_ok=True)
+
+    setup_wandb()
+    wandb.init(project="shine_gaussian", config=vars(config), dir=run_path) # your own worksapce
+    wandb.run.name = run_name
+    
+    shutil.copy2(config_file_path, run_path)
+
+    print('------------init Dataset-----------------')
+    gsDataset = GsDataset(device=device, pose_file_path=config.pose_file_path, image_folder_path=config.image_folder_path)
+    print('------------init Network-----------------')
+    gsNetwork = GsNetwork(device=device, pc_path = config.pc_path)
     gsRender = GsRender() 
+
+    print('------------init complete-----------------')
 
     def ssim(img1, img2, window_size=11, size_average=True):
         def create_window(window_size, channel):
@@ -513,30 +599,51 @@ def main(spatial_lr_scale=1.0, position_lr_max_steps=1000*10, device=['cpu','cud
             window = window.cuda(img1.get_device())
         window = window.type_as(img1)
         return _ssim(img1, img2, window, window_size, channel, size_average)
+
+    xyz_lr = config.xyz_lr
+    f_dc_lr = config.f_dc_lr
+    f_rest_lr = config.f_rest_lr
+    opacity_lr = config.opacity_lr
+    scaling_lr = config.scaling_lr
+    rotation_lr = config.rotation_lr
    
-    optimizer = torch.optim.Adam([{'params': [gsNetwork._xyz], 'lr': 0.00016 * spatial_lr_scale, "name": "xyz"}, {'params': [gsNetwork._features_dc], 'lr': 0.0025, "name": "f_dc"}, 
-                                  {'params': [gsNetwork._features_rest], 'lr': 0.0025/20.0, "name": "f_rest"}, {'params': [gsNetwork._opacity], 'lr': 0.05, "name": "opacity"}, 
-                                  {'params': [gsNetwork._scaling], 'lr': 0.005, "name": "scaling"}, {'params': [gsNetwork._rotation], 'lr': 0.001, "name": "rotation"}], lr=0.0, eps=1e-15)
+    optimizer = torch.optim.Adam([{'params': [gsNetwork._xyz], 'lr': xyz_lr * spatial_lr_scale, "name": "xyz"}, 
+                                  {'params': [gsNetwork._features_dc], 'lr': f_dc_lr, "name": "f_dc"}, 
+                                  {'params': [gsNetwork._features_rest], 'lr': f_rest_lr, "name": "f_rest"}, 
+                                  {'params': [gsNetwork._opacity], 'lr': opacity_lr, "name": "opacity"}, 
+                                  {'params': [gsNetwork._scaling], 'lr': scaling_lr, "name": "scaling"}, 
+                                  {'params': [gsNetwork._rotation], 'lr': rotation_lr, "name": "rotation"}], lr=0.0, eps=1e-15)
 
-    densification_interval = position_lr_max_steps//300
-    opacity_reset_interval = position_lr_max_steps//10
-    densify_from_iter = position_lr_max_steps//6
-    densify_until_iter = position_lr_max_steps//2
-    densify_grad_threshold = 0.0002
+    densification_interval = config.densification_interval
+    opacity_reset_interval = config.opacity_reset_interval
+    densify_from_iter = config.densify_from_iter
+    densify_until_iter = config.densify_until_iter
+    densify_grad_threshold = config.densify_grad_threshold
 
-    lambda_dssim = 0.2
-    white_background = False
+    out_result_iter = config.out_result_iter
+
+    lambda_dssim = config.lambda_dssim
+    white_background = config.white_background
     background = torch.tensor([[0, 0, 0],[1, 1, 1]][white_background]).float().to(device)
-    viewpoint_stack = gsDataset.image_camera.copy()    
+    viewpoint_stack = gsDataset.image_camera.copy()
+
+    T0 = get_time()
+
     for iteration in range(1, position_lr_max_steps+1):
         if iteration % (position_lr_max_steps//30) == 0: gsNetwork.oneupSHdegree()
 
-        viewpoint_cam = viewpoint_stack[random.randint(0, len(viewpoint_stack)-1)]        
+        rand_index = random.randint(0, len(viewpoint_stack)-1)
+        viewpoint_cam = viewpoint_stack[rand_index]        
         image, viewspace_point_tensor, radii,visibility_filter = gsRender.render(viewpoint_cam, gsNetwork, background, device=device)
 
-        gt_image = viewpoint_cam.image_goal  #.to(device)
+        gt_image = viewpoint_cam.image_goal.to(device)
         Ll1 = torch.abs((image - gt_image)).mean()
-        loss = (1.0 - lambda_dssim) * Ll1 + lambda_dssim * (1.0 - ssim(image, gt_image))
+
+        psnr = mse2psnr(img2mse(image, gt_image))
+
+        l_ssim = ssim(image, gt_image)
+
+        loss = (1.0 - lambda_dssim) * Ll1 + lambda_dssim * (1.0 - l_ssim)
         loss.backward() 
 
         with torch.no_grad():
@@ -552,15 +659,31 @@ def main(spatial_lr_scale=1.0, position_lr_max_steps=1000*10, device=['cpu','cud
             optimizer.step()
             optimizer.zero_grad(set_to_none = True)
 
-        update_learning_rate(optimizer, iteration, position_lr_max_steps)
+        update_learning_rate(optimizer, iteration, position_lr_max_steps, spatial_lr_scale)
 
-        if iteration%100==0: 
+        wandb_log_content = {'iteration': iteration, 'rand_index': rand_index, 'L1_loss': Ll1, 'PSNR': psnr,
+                             'SSIM': l_ssim, 'total_loss': loss}
+        wandb.log(wandb_log_content)
+
+        if iteration % out_result_iter == 0: 
+            T1 = get_time()
+            str_tmp = 'timing(s)/every_' + str(out_result_iter) + '_iter'
+            wandb_log_content = {str_tmp: T1-T0}
+            wandb.log(wandb_log_content)
+            T0 = T1
+
             print('iteration=%06d  loss=%.6f'%(iteration, loss.item()))
-            os.makedirs('./outs/', exist_ok=True)
-            torchvision.utils.save_image(image, './outs/image_%06d_o.png'%(iteration))
-            torchvision.utils.save_image(gt_image, './outs/image_%06d_t.png'%(iteration))
+            # os.makedirs('./outs/', exist_ok=True)
+            out_image_path = image_path + '/image_%06d_out.png'%(iteration)
+            gt_image_path = image_path + '/image_%06d_gt.png'%(iteration)
+            # torchvision.utils.save_image(image, './outs/image_%06d_o.png'%(iteration))
+            torchvision.utils.save_image(image, out_image_path)
+            # torchvision.utils.save_image(gt_image, './outs/image_%06d_t.png'%(iteration))
+            torchvision.utils.save_image(gt_image, gt_image_path)
 
-    ms.save_mesh(gsNetwork, gsRender)
+    gsNetwork.move2cpu()
+    print('------------begin mesh construct-----------------')
+    ms.save_mesh(gsNetwork, gsRender, mesh_shape=mesh_path + '/gs_shape.obj', mesh_texture=mesh_path + '/gs_texture.obj')
 
 if __name__ == '__main__':  # python -Bu gs.py
     main()
