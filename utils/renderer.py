@@ -2,12 +2,17 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import open3d as o3d
+from PIL import Image
 
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 
+# from utils.config import SHINEConfig
 from utils.config import SHINEConfig
-
+from model.feature_octree import FeatureOctree
+from model.sdf_decoder import SDFDecoder
+from model.color_decoder import ColorDecoder
+from utils.pose import read_poses_file
 
 def get_rays(H, W, fx, fy, cx, cy, c2w, device):
     """
@@ -15,7 +20,7 @@ def get_rays(H, W, fx, fy, cx, cy, c2w, device):
 
     """
     if isinstance(c2w, np.ndarray):
-        c2w = torch.from_numpy(c2w)
+        c2w = torch.from_numpy(c2w).to(device)
     # pytorch's meshgrid has indexing='ij'
     i, j = torch.meshgrid(torch.linspace(0, W-1, W), torch.linspace(0, H-1, H))
     i = i.t()  # transpose
@@ -113,8 +118,18 @@ def render_batch_ray(config: SHINEConfig, sdf_octree, color_octree, sdf_mlp, col
         nodes_coord_scaled = sdf_octree.get_octree_nodes(config.tree_level_world) # query level top-down
         min_nodes = np.min(nodes_coord_scaled, 0) # 最小和最大坐标点
         max_nodes = np.max(nodes_coord_scaled, 0)
-        bound = max_nodes - min_nodes
+        print("min_nodes: ")
+        print(min_nodes)
+        print("max_nodes: ")
+        print(max_nodes)
+        # bound = max_nodes - min_nodes
+        bound = np.zeros((3,2))
+        bound[:, 0] = min_nodes
+        bound[:, 1] = max_nodes
         bound = bound / config.scale
+        bound = torch.tensor(bound, device=device)
+        print("bound: ")
+        print(bound)
 
         with torch.no_grad():
             det_rays_o = rays_o.clone().detach().unsqueeze(-1)  # (N, 3, 1)
@@ -308,6 +323,7 @@ def render_img(config: SHINEConfig, sdf_octree, color_octree, sdf_mlp, color_mlp
             gt_depth = depth_image
 
             gt_depth = gt_depth.reshape(-1)
+            gt_depth = torch.tensor(gt_depth, device=device)
 
             depth_list = []
             uncertainty_list = []
@@ -341,32 +357,45 @@ def render_img(config: SHINEConfig, sdf_octree, color_octree, sdf_mlp, color_mlp
 
 
 if __name__ == "__main__":
-    c2w = torch.tensor([1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]).reshape(4,4)
-    rays_o, rays_d = get_rays(1024, 1280, 863.4241, 863.4171, 640.6808, 518.3392, c2w, "cpu")
-    rays_o = rays_o.reshape(-1, 3)
-    rays_d = rays_d.reshape(-1, 3)
+    config = SHINEConfig()
+    config.load('/home/wuchenyang/NeRF/SHINE_mapping/config/carla/rgb_carla_incre_reg.yaml')
 
-    rays_d = rays_d * 1000
+    sdf_octree = FeatureOctree(config, is_color=False)
+    color_octree = FeatureOctree(config, is_color=True)
 
-    # 假设 rays_d 是形状为 (N, 3) 的 PyTorch 张量
-    N, _ = rays_d.shape
+    sdf_mlp = SDFDecoder(config)
+    color_mlp = ColorDecoder(config)
 
-    # 创建一个三维绘图
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
+    loaded_model = torch.load('/home/wuchenyang/NeRF/SHINE_mapping/experiments/rgb_carla_incre_reg_2023-11-20_10-20-17/model/model_frame_1000.pth')
+    sdf_mlp.load_state_dict(loaded_model["sdf_decoder"])
+    color_mlp.load_state_dict(loaded_model["color_decoder"])
 
-    # 提取 x、y、z 分量
-    x = rays_d[:, 0].cpu().numpy()
-    y = rays_d[:, 1].cpu().numpy()
-    z = rays_d[:, 2].cpu().numpy()
+    if 'sdf_octree' in loaded_model.keys(): # also load the feature octree  
+        sdf_octree = loaded_model["sdf_octree"]
+        sdf_octree.print_detail()
 
-    # 绘制向量
-    ax.quiver(0, 0, 0, x, y, z)
+    if 'color_octree' in loaded_model.keys(): # also load the feature octree  
+        color_octree = loaded_model["color_octree"]
+        color_octree.print_detail()
 
-    # 设置坐标轴范围
-    ax.set_xlim([x.min(), x.max()])
-    ax.set_ylim([y.min(), y.max()])
-    ax.set_zlim([z.min(), z.max()])
+    calib = {}
+    calib['Tr'] = np.eye(4)
+    poses = read_poses_file(config.pose_path, calib)
+    
+    sigma_size = torch.nn.Parameter(torch.ones(1, device="cuda")*1.0) 
 
-    # 显示图形
-    plt.show()
+    depth_img, color_img = render_img(config, sdf_octree, color_octree, sdf_mlp, color_mlp,
+                                      poses[0], sigma_size, "cuda")
+    
+    depth_array = depth_img.cpu().numpy()
+    color_array = color_img.cpu().numpy()
+
+    # 创建 PIL Image 对象
+    depth_image = Image.fromarray((depth_array).astype(np.uint8))  # 假设深度值范围为 [0, 1]
+    color_image = Image.fromarray((color_array).astype(np.uint8))  # 假设颜色值范围为 [0, 1]
+
+    # 保存图像
+    depth_image.save('./test_result/depth_image.png')
+    color_image.save('./test_result/color_image.png')
+
+
