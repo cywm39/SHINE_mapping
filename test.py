@@ -460,23 +460,149 @@ def get_rays(H, W, fx, fy, cx, cy, c2w, device):
 #     # o3d.io.write_point_cloud("test.pcd", point_cloud)
 
 
-if __name__ == "__main__":
-    config = SHINEConfig()
-    config.load(config_file_path)
-    sdf_octree = FeatureOctree(config, is_color=False)
-    loaded_model = torch.load(load_model_path)
-    if 'sdf_octree' in loaded_model.keys(): # also load the feature octree  
-        sdf_octree = loaded_model["sdf_octree"]
-        sdf_octree.print_detail()
-    # visualize the octree (it is a bit slow and memory intensive for the visualization)
-    vis_octree = True
-    if vis_octree: 
-        vis_list = [] # create a list of bbx for the octree nodes
-        for l in range(config.tree_level_feat):
-            nodes_coord = sdf_octree.get_octree_nodes(config.tree_level_world-l)/config.scale
-            box_size = np.ones(3) * config.leaf_vox_size * (2**l)
-            for node_coord in nodes_coord:
-                node_box = o3d.geometry.AxisAlignedBoundingBox(node_coord-0.5*box_size, node_coord+0.5*box_size)
-                node_box.color = random_color_table[l]
-                vis_list.append(node_box)
-        o3d.visualization.draw_geometries(vis_list)
+# if __name__ == "__main__":
+    # config = SHINEConfig()
+    # config.load(config_file_path)
+    # sdf_octree = FeatureOctree(config, is_color=False)
+    # loaded_model = torch.load(load_model_path)
+    # if 'sdf_octree' in loaded_model.keys(): # also load the feature octree  
+    #     sdf_octree = loaded_model["sdf_octree"]
+    #     sdf_octree.print_detail()
+    # # visualize the octree (it is a bit slow and memory intensive for the visualization)
+    # vis_octree = True
+    # if vis_octree: 
+    #     vis_list = [] # create a list of bbx for the octree nodes
+    #     for l in range(config.tree_level_feat):
+    #         nodes_coord = sdf_octree.get_octree_nodes(config.tree_level_world-l)/config.scale
+    #         box_size = np.ones(3) * config.leaf_vox_size * (2**l)
+    #         for node_coord in nodes_coord:
+    #             node_box = o3d.geometry.AxisAlignedBoundingBox(node_coord-0.5*box_size, node_coord+0.5*box_size)
+    #             node_box.color = random_color_table[l]
+    #             vis_list.append(node_box)
+    #     o3d.visualization.draw_geometries(vis_list)
+
+# import numpy as np
+# from scipy.spatial.transform import Rotation as R
+
+# def create_transformation_matrix(translation, rotation):
+#     # 创建变换矩阵
+#     matrix = np.eye(4)
+#     matrix[:3, 3] = translation
+#     matrix[:3, :3] = R.from_euler('xyz', rotation, degrees=True).as_matrix()
+#     return matrix
+
+# # 相机外部参数
+# camera_translation = np.array([3.5, 0.2, 2.55])
+# camera_rotation = np.array([0.0, 20.0, 0.0])
+
+# # 雷达外部参数
+# lidar_translation = np.array([3.5, -0.2, 2.55])
+# lidar_rotation = np.array([0.0, 0.0, 0.0])
+
+# # 创建相机和雷达的变换矩阵
+# camera_matrix = create_transformation_matrix(camera_translation, camera_rotation)
+# lidar_matrix = create_transformation_matrix(lidar_translation, lidar_rotation)
+
+# # 计算相机到雷达的相对变换矩阵
+# camera_to_lidar_matrix = np.linalg.inv(lidar_matrix) @ camera_matrix
+
+# print("Camera to Lidar Transformation Matrix:")
+# print(camera_to_lidar_matrix)
+
+
+
+
+# import open3d as o3d
+# import numpy as np
+# from copy import deepcopy as dc
+# from matplotlib import pyplot as plt
+# import matplotlib.cm as cm
+# import matplotlib.image as mpimg
+# from scipy.spatial.transform import Rotation as R
+
+
+# def projection(points, camera_scan, intrinsics, extrinsics, filter_outliers=True, vis=True):
+#     trans_lidar_to_camera = extrinsics
+
+#     points3d_lidar = points
+#     points3d_lidar = np.insert(points3d_lidar,3,1,axis=1)
+
+#     points3d_camera = trans_lidar_to_camera @ points3d_lidar.T
+
+#     K = intrinsics
+
+#     inliner_indices_arr = np.arange(points3d_camera.shape[1])
+#     if filter_outliers:
+#         condition = points3d_camera[2, :] > 0.0
+#         points3d_camera = points3d_camera[:, condition]
+#         inliner_indices_arr = inliner_indices_arr[condition]
+
+#     points2d_camera = K @ points3d_camera
+#     points2d_camera = (points2d_camera[:2, :] / points2d_camera[2, :]).T
+#     image_h, image_w, _ = camera_scan.shape
+
+#     if filter_outliers:
+#         condition = np.logical_and(
+#         (points2d_camera[:, 1] < image_h) & (points2d_camera[:, 1] > 0),
+#         (points2d_camera[:, 0] < image_w) & (points2d_camera[:, 0] > 0))
+#         points2d_camera = points2d_camera[condition]
+#         points3d_camera = (points3d_camera.T)[condition]
+#         inliner_indices_arr = inliner_indices_arr[condition]
+#     else:
+#         points3d_camera = points3d_camera.T
+#         if(len(points2d_camera) == 0):
+#             print("no point on the image")
+#         return
+#     if(vis):
+#         plt.imshow(camera_scan)
+#         distances = np.sqrt(np.sum(np.square(points3d_camera), axis=-1))
+#         colors = cm.jet(distances / np.max(distances))
+#         plt.gca().scatter(points2d_camera[:, 0], points2d_camera[:, 1], color=colors, s=1)
+#         plt.show()
+# def main():
+#     cloud = o3d.io.read_point_cloud("pcd_path")
+#     cloud.voxel_down_sample(4)
+#     camera = mpimg.imread("image_path")
+#     intrinsics = np.array( ### edit
+#         [[400., 0.0, 400., 0],
+#         [0.0, 400., 300., 0],
+#         [0.0, 0.0, 1.0, 0]])
+#     extrinsics = np.array(### edit
+#         [ 0.93969262, 0., -0.34202014, 0.,
+#                       0.,  1., 0., -0.4,
+#                       0.34202014,  0.,  0.93969262, 0.,
+#                       0., 0., 0., 1.]).reshape(4,4)
+
+
+#     projection(np.array(cloud.points), camera, intrinsics, extrinsics, filter_outliers=True, vis=True)
+
+# main()
+
+
+import numpy as np
+from scipy.spatial.transform import Rotation as R
+
+def create_transformation_matrix(translation, rotation):
+    # 创建变换矩阵
+    matrix = np.eye(4)
+    matrix[:3, 3] = translation
+    matrix[:3, :3] = R.from_euler('xyz', rotation, degrees=True).as_matrix()
+    return matrix
+
+# 相机外部参数
+camera_translation = np.array([3.5, 0.2, 2.55])
+camera_rotation = np.array([20.0, 0.0, 0.0])
+
+# 雷达外部参数
+lidar_translation = np.array([3.5, -0.2, 2.55])
+lidar_rotation = np.array([0.0, 0.0, 0.0])
+
+# 创建相机和雷达的变换矩阵
+camera_matrix = create_transformation_matrix(camera_translation, camera_rotation)
+lidar_matrix = create_transformation_matrix(lidar_translation, lidar_rotation)
+
+# 计算相机到雷达的相对变换矩阵
+camera_to_lidar_matrix = np.linalg.inv(camera_matrix) @ lidar_matrix
+
+print("Camera to Lidar Transformation Matrix:")
+print(camera_to_lidar_matrix)

@@ -20,7 +20,7 @@ from utils.config import SHINEConfig
 from model.color_decoder import ColorDecoder
 from model.sdf_decoder import SDFDecoder
 from model.feature_octree import FeatureOctree
-from mesher import Mesher
+from utils.mesher import Mesher
 from utils.pose import read_poses_file
 from natsort import natsorted 
 

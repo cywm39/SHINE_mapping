@@ -201,6 +201,13 @@ class SHINEConfig:
         self.lr_decay_step: List = [10000, 50000, 100000]
         self.dropout: float = 0
 
+        # rendering
+        self.ray_batch_size: int = 10000
+        self.pc_map_path: str = ""  # whole point cloud map path
+        self.N_samples: int = 32
+        self.N_surface: int = 16
+        self.N_importance: int = 0
+
         # eval
         self.wandb_vis_on: bool = False
         self.o3d_vis_on: bool = True # visualize the mesh in-the-fly using o3d visualzier or not [press space to pasue/resume]
@@ -387,6 +394,13 @@ class SHINEConfig:
         #     "lr_iters_reduce_ratio"
         # ]  # decay the learning rate after certain iterss by such ratio
         self.weight_decay = float(config_args["optimizer"]["weight_decay"])  # coefficient for L2 regularization
+
+        #rendering
+        self.ray_batch_size = config_args["rendering"]["ray_batch_size"]
+        self.pc_map_path = config_args["rendering"]["pc_map_path"]
+        self.N_samples = config_args["rendering"]["N_samples"]
+        self.N_surface = config_args["rendering"]["N_surface"]
+        self.N_importance = config_args["rendering"]["N_importance"]
         
 
         # vis and eval

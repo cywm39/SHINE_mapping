@@ -164,6 +164,19 @@ class InputDataset(Dataset):
         image_filename = os.path.join(self.config.image_path, self.image_filenames[frame_id])
         frame_image = imageio.imread(image_filename)
 
+        # carla dataset only---------------------------------#
+        points3d_lidar = np.asarray(frame_pc.points, dtype=np.float32)
+        points3d_lidar = np.insert(points3d_lidar, 3, 1, axis=1)
+        tran = np.array([[0, 0, 1, 0],
+                        [-1, 0, 0, 0],
+                        [0, -1, 0, 0],
+                        [0,0,0,1]])
+        points3d_lidar = points3d_lidar @ tran
+        points3d_lidar = points3d_lidar[:, :-1]
+        frame_pc.points = o3d.utility.Vector3dVector(points3d_lidar)
+        self.cur_pose_ref = self.cur_pose_ref @ tran
+        # carla dataset only---------------------------------#
+
         # block filter: crop the point clouds into a cube
         # 根据设置的bbx对当前读取的一帧点云进行crop。注意这里bbx的中心在坐标系的原点处（z轴不一定，因为z轴max和min值不一样）,
         # 所以这个bbx是对“当前雷达扫描到的一帧点云”的范围进行限制，而不是对全局点云地图做了限制，
@@ -404,6 +417,163 @@ class InputDataset(Dataset):
                 self.sem_label_pool = torch.cat((self.sem_label_pool, sem_label.to(self.pool_device)), 0)
             else:
                 self.sem_label_pool = None
+
+    def process_frame_batch(self):
+        pc_radius = self.config.pc_radius
+        min_z = self.config.min_z
+        max_z = self.config.max_z
+        normal_radius_m = self.config.normal_radius_m
+        normal_max_nn = self.config.normal_max_nn
+        rand_down_r = self.config.rand_down_r
+        vox_down_m = self.config.vox_down_m
+        sor_nn = self.config.sor_nn
+        sor_std = self.config.sor_std
+
+        total_map = o3d.geometry.PointCloud()
+
+        for i in range(self.total_pc_count):
+            if (i < self.config.begin_frame or i > self.config.end_frame or \
+                i % self.config.every_frame != 0): 
+                continue
+            lidar_pose = self.poses_ref[i]
+            frame_filename = os.path.join(self.config.pc_path, self.pc_filenames[i])
+            frame_pc = self.read_point_cloud(frame_filename)
+
+            bbx_min = np.array([-pc_radius, -pc_radius, min_z])
+            bbx_max = np.array([pc_radius, pc_radius, max_z])
+            bbx = o3d.geometry.AxisAlignedBoundingBox(bbx_min, bbx_max)
+            frame_pc = frame_pc.crop(bbx)
+
+            # surface normal estimation
+            if self.config.estimate_normal:
+                frame_pc.estimate_normals(
+                    search_param=o3d.geometry.KDTreeSearchParamHybrid(
+                        radius=normal_radius_m, max_nn=normal_max_nn
+                    )
+                )
+
+            # point cloud downsampling
+            if self.config.rand_downsample:
+                # random downsampling
+                frame_pc = frame_pc.random_down_sample(sampling_ratio=rand_down_r)
+            else:
+                # voxel downsampling
+                frame_pc = frame_pc.voxel_down_sample(voxel_size=vox_down_m)
+
+            # apply filter (optional)
+            if self.config.filter_noise:
+                frame_pc = frame_pc.remove_statistical_outlier(
+                    sor_nn, sor_std, print_progress=False
+                )[0]
+
+            total_map += frame_pc.transform(lidar_pose)
+
+        lidar2camera_matrix_tmp = self.lidar2camera_matrix.detach().cpu().numpy()
+        for i in tqdm(range(self.total_pc_count)):
+            if (i < self.config.begin_frame or i > self.config.end_frame or \
+                i % self.config.every_frame != 0): 
+                continue
+            lidar_pose = self.poses_ref[i]
+            image_filename = os.path.join(self.config.image_path, self.image_filenames[i])
+            frame_image = imageio.imread(image_filename)
+
+            total_pc_points = np.asarray(total_map.points, dtype=np.float64)
+            total_map_tmp = total_map.transform(np.linalg.inv(lidar_pose))
+            # lidar2camera_matrix_tmp.requires_grad = False
+            # 去掉不能映射到相机图片中的点
+            # 将点从雷达坐标系转到相机坐标系
+            points3d_lidar = np.asarray(total_map_tmp.points, dtype=np.float64)
+            # print("befor first filter, points3d_lidar.shape[0]: " + str(points3d_lidar.shape[0]))
+            # points3d_lidar = frame_pc.clone()
+            points3d_lidar = np.insert(points3d_lidar, 3, 1, axis=1)
+            points3d_camera = lidar2camera_matrix_tmp @ points3d_lidar.T
+            H, W, fx, fy, cx, cy, = self.config.H, self.config.W, self.config.fx, self.config.fy, self.config.cx, self.config.cy
+            K = np.array([[fx, .0, cx, .0], [.0, fy, cy, .0], [.0, .0, 1.0, .0]]).reshape(3, 4)
+            # 过滤掉相机坐标系内位于相机之后的点
+            tmp_mask = points3d_camera[2, :] > 0.0
+            points3d_camera = points3d_camera[:, tmp_mask]
+            total_pc_points = total_pc_points[tmp_mask]
+            # print("after first filter, points3d_camera.shape[1]: " + str(points3d_camera.shape[1]))
+            # 从相机坐标系映射到uv平面坐标
+            points2d_camera = K @ points3d_camera
+            points2d_camera = (points2d_camera[:2, :] / points2d_camera[2, :]).T # 操作之后points2d_camera维度:[n, 2]
+            # 过滤掉uv平面坐标内在图像外的点
+            # TODO points2d_camera[:, 1]是否真的对应H? 以及下面的frame_image[points2d_camera[:,1].astype(int), points2d_camera[:,0]行和列是否正确?
+            tmp_mask = np.logical_and(
+                (points2d_camera[:, 1] < H) & (points2d_camera[:, 1] > 0),
+                (points2d_camera[:, 0] < W) & (points2d_camera[:, 0] > 0)
+            )
+            points2d_camera = points2d_camera[tmp_mask]
+            # points3d_camera = (points3d_camera.T)[tmp_mask] # 操作之后points3d_camera维度: [n, 4]
+            total_pc_points = total_pc_points[tmp_mask]
+            # print("after second filter, points2d_camera.shape[0]: " + str(points2d_camera.shape[0]))
+            # 取出图像内uv坐标对应的颜色
+            frame_color_label = torch.tensor(frame_image[points2d_camera[:,1].astype(int), points2d_camera[:,0].astype(int)], 
+                                            device=self.pool_device)
+
+            frame_pc = o3d.geometry.PointCloud()
+            frame_pc.points = o3d.utility.Vector3dVector(total_pc_points)
+            
+            cur_pose_ref_torch = torch.tensor(lidar_pose, dtype=self.dtype, device=self.pool_device)
+            cur_camera_pose_ref = cur_pose_ref_torch @ self.lidar2camera_matrix
+            camera_origin = cur_camera_pose_ref[:3, 3] * self.config.scale
+            camera_origin_torch = camera_origin
+
+            frame_pc_s = frame_pc.scale(self.config.scale, center=(0,0,0))
+            frame_pc_s_torch = torch.tensor(np.asarray(frame_pc_s.points), dtype=self.dtype, device=self.pool_device)
+
+            frame_normal_torch = None
+            frame_label_torch = None
+            (coord, sdf_label, normal_label, sem_label, weight, sample_depth, ray_depth) = \
+                self.sampler.sample(frame_pc_s_torch, camera_origin_torch, \
+                frame_normal_torch, frame_label_torch)
+            
+            frame_origin = lidar_pose[:3, 3] * self.config.scale  # translation part
+            frame_origin_torch = torch.tensor(frame_origin, dtype=self.dtype, device=self.pool_device)
+        
+            origin_repeat = frame_origin_torch.repeat(coord.shape[0], 1)
+            time_repeat = torch.tensor(i, dtype=self.dtype, device=self.pool_device).repeat(coord.shape[0])
+
+            # update feature octree
+            if self.sdf_octree is not None:
+                if self.config.octree_from_surface_samples:
+                    # 如果设置了octree_from_surface_samples，也就是用surface类型采样点来更新octree，就传递surface类型的采样点到update里，
+                    # 并且注意这里的coord是scale后的坐标
+                    # update with the sampled surface points
+                    self.sdf_octree.update(coord[weight > 0, :].to(self.device), False)
+                else:
+                    # 否则使用当前帧点云来更新octree，区别在于使用采样点更新的时候memory占用显然会更大，但是更robust
+                    # 并且这里的点云坐标也是scale后的坐标
+                    # update with the original points
+                    self.sdf_octree.update(frame_pc_s_torch.to(self.device), False)
+
+            if self.color_octree is not None:
+                if self.config.color_octree_from_surface_samples:
+                    self.color_octree.update(coord[weight > 0, :].to(self.device), False)
+                else:
+                    self.color_octree.update(frame_pc_s_torch.to(self.device), False) 
+
+            self.coord_pool = torch.cat((self.coord_pool, coord.to(self.pool_device)), 0)            
+            self.weight_pool = torch.cat((self.weight_pool, weight.to(self.pool_device)), 0)
+            self.color_label_pool = torch.cat((self.color_label_pool, frame_color_label.to(self.pool_device)), 0)
+            if self.config.ray_loss:
+                self.sample_depth_pool = torch.cat((self.sample_depth_pool, sample_depth.to(self.pool_device)), 0)
+                self.ray_depth_pool = torch.cat((self.ray_depth_pool, ray_depth.to(self.pool_device)), 0)
+            else:
+                self.sdf_label_pool = torch.cat((self.sdf_label_pool, sdf_label.to(self.pool_device)), 0)
+                self.origin_pool = torch.cat((self.origin_pool, origin_repeat.to(self.pool_device)), 0)
+                self.time_pool = torch.cat((self.time_pool, time_repeat.to(self.pool_device)), 0)
+
+            if normal_label is not None:
+                self.normal_label_pool = torch.cat((self.normal_label_pool, normal_label.to(self.pool_device)), 0)
+            else:
+                self.normal_label_pool = None
+            
+            if sem_label is not None:
+                self.sem_label_pool = torch.cat((self.sem_label_pool, sem_label.to(self.pool_device)), 0)
+            else:
+                self.sem_label_pool = None
+
 
     def read_point_cloud(self, filename: str):
         # read point cloud from either (*.ply, *.pcd) or (kitti *.bin) format

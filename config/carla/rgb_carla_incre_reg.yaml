@@ -1,0 +1,99 @@
+setting:
+  name: "rgb_carla_incre_reg"
+  output_root: "./experiments/"
+  pc_path: "/home/wuchenyang/NeRF/dataset/carla/2023_11_14/livox_pc"
+  image_path: "/home/wuchenyang/NeRF/dataset/carla/2023_11_14/image"
+  label_path: "" # optional for semantic mapping
+  pose_path: "/home/wuchenyang/NeRF/dataset/carla/2023_11_14/lidar_odometry_kitti.txt"
+  calib_path: ""
+  load_model: False
+  model_path: "" 
+  first_frame_ref: False
+  begin_frame: 0
+  end_frame: 5748
+  every_frame: 1 # 1 means does not skip
+  device: "cuda"
+  gpu_id: "0"
+camera:
+  image_width: 800
+  image_height: 600
+  fx: 400.
+  fy: 400.
+  cx: 400.
+  cy: 300.
+  camera_ext_matrix: [1., 0., 0., 0.,
+                      0., 0.93969262, 0.34202014, -0.37587705,
+                      0., -0.34202014, 0.93969262, 0.13680806,
+                      0., 0., 0., 1.]
+  # camera_ext_matrix: [-0.00113207, -0.9999999, 0.000504622, 0, 
+  #                     -0.0158688,  -0.000486594, -0.999874, 0,
+  #                     0.999873,  -0.00113994,  -0.0158682, 0,
+  #                     0, 0, 0, 1]
+process:
+  min_range_m: 1.5 # default: 3.0
+  pc_radius_m: 50.0  # distance filter for each frame. Default value is 25.0
+  min_z_m: -10.0 # defalut: -3.5
+  rand_downsample: False # use random or voxel downsampling
+  vox_down_m: 0.05
+  rand_down_r: 0.2
+sampler:
+  surface_sample_range_m: 0.5 #default: 0.5
+  surface_sample_n: 3
+  free_sample_begin_ratio: 0.3 #default: 0.3
+  free_sample_end_dist_m: 1.0 #default: 1.0
+  free_sample_n: 3
+octree:
+  leaf_vox_size: 0.1 #default: 0.2
+  tree_level_world: 12
+  tree_level_feat: 3 # default: 3
+  color_tree_level_feat: 3
+  feature_dim: 32 # default: 8
+  poly_int_on: True
+  octree_from_surface_samples: True
+  color_feature_dim: 32
+  color_poly_int_on: True
+decoder:
+  mlp_level: 2
+  mlp_hidden_dim: 32
+  freeze_after_frame: 20
+  color_mlp_level: 2
+  color_mlp_hidden_dim: 32
+loss:
+  ray_loss: True
+  main_loss_type: dr  # select from sdf_bce (our proposed), sdf_l1, sdf_l2, dr, dr_neus
+  sigma_sigmoid_m: 0.1  # default: 0.1
+  loss_weight_on: False
+  behind_dropoff_on: False
+  ekional_loss_on: False
+  weight_e: 0.1
+continual:
+  continual_learning_reg: True # using incremental mapping with regularization. default: True. 注意关闭这个以后大于500帧时的too many scans, use cpu memory
+  lambda_forget: 1e4 # the larger this value, the model would be less likely to forget. default: 1e4
+  color_lambda_forget: 0
+  window_replay_on: False # replay within the sliding window
+  window_radius_m: 0
+optimizer:
+  iters: 50  # iterations per frame. default value is 50.
+  batch_size: 4096
+  learning_rate: 0.01
+  calibration_lr: 0.0
+  weight_decay: 1e-7 # l2 regularization
+rendering:
+  ray_batch_size: 10000
+  pc_map_path:
+  N_samples: 32
+  N_surface: 16
+  N_importance: 0
+eval:
+  wandb_vis_on: True # log to wandb or not. default: False
+  o3d_vis_on: False # visualize the mapping or not
+  vis_freq_iters: 0 
+  save_freq_iters: 1000 # save the model and octree every x iterations
+  save_freq_frame: 1000 # save the model and octree every x frames
+  mesh_freq_frame: 100 # reconstruct the mesh every x frames
+  mc_res_m: 0.1 # reconstruction marching cubes resolution. default: 0.1
+  mc_with_octree: True # querying sdf only in certain levels of the octree
+  mc_local: False
+  mc_vis_level: 1 # default: 1
+  save_map: True # save the sdf map or not. default: False
+
