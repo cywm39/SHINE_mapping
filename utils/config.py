@@ -200,6 +200,7 @@ class SHINEConfig:
         self.lr_iters_reduce_ratio: float = 0.1
         self.lr_decay_step: List = [10000, 50000, 100000]
         self.dropout: float = 0
+        self.cr_loss_weight: float = 1e2
 
         # rendering
         self.ray_batch_size: int = 10000
@@ -394,6 +395,7 @@ class SHINEConfig:
         #     "lr_iters_reduce_ratio"
         # ]  # decay the learning rate after certain iterss by such ratio
         self.weight_decay = float(config_args["optimizer"]["weight_decay"])  # coefficient for L2 regularization
+        self.cr_loss_weight = float(config_args["optimizer"]["cr_loss_weight"])
 
         #rendering
         self.ray_batch_size = config_args["rendering"]["ray_batch_size"]

@@ -318,8 +318,15 @@ def render_img(config: SHINEConfig, sdf_octree, color_octree, sdf_mlp, color_mlp
             points2d_camera = points2d_camera[tmp_mask]
             points3d_camera_tmp = points3d_camera_tmp[:, tmp_mask]
             depth_image = np.zeros((H, W))
+            test_image = np.zeros((H, W, 3))
             depth_image[points2d_camera[:,1].astype(int), points2d_camera[:,0].astype(int)] = points3d_camera_tmp[2, :]
+            test_image[points2d_camera[:,1].astype(int), points2d_camera[:,0].astype(int)] = np.array([255,255,255])
 
+            depth_test = Image.fromarray((depth_image).astype(np.uint8))  # 假设深度值范围为 [0, 1]
+            color_test = Image.fromarray((test_image).astype(np.uint8))  # 假设颜色值范围为 [0, 1]
+            depth_test.save('./test_result/test_depth.png')
+            color_test.save('./test_result/test_color.png')
+            
             gt_depth = depth_image
 
             gt_depth = gt_depth.reshape(-1)
@@ -335,6 +342,7 @@ def render_img(config: SHINEConfig, sdf_octree, color_octree, sdf_mlp, color_mlp
                 rays_d_batch = rays_d[i:i+ray_batch_size]
                 rays_o_batch = rays_o[i:i+ray_batch_size]
                 if gt_depth is None:
+                # if True:
                     ret = render_batch_ray(
                         config, sdf_octree, color_octree, sdf_mlp, color_mlp, 
                         rays_d_batch, rays_o_batch, device, sigma_size, gt_depth=None)
@@ -366,7 +374,7 @@ if __name__ == "__main__":
     sdf_mlp = SDFDecoder(config)
     color_mlp = ColorDecoder(config)
 
-    loaded_model = torch.load('/home/wuchenyang/NeRF/SHINE_mapping/experiments/rgb_carla_incre_reg_2023-11-20_10-20-17/model/model_frame_1000.pth')
+    loaded_model = torch.load('/home/wuchenyang/NeRF/SHINE_mapping/experiments/rgb_carla_incre_reg_2023-11-22_22-39-35/model/model_frame_100.pth')
     sdf_mlp.load_state_dict(loaded_model["sdf_decoder"])
     color_mlp.load_state_dict(loaded_model["color_decoder"])
 
@@ -378,14 +386,30 @@ if __name__ == "__main__":
         color_octree = loaded_model["color_octree"]
         color_octree.print_detail()
 
+    if 'sigma_size' in loaded_model.keys():
+        sigma_size = loaded_model['sigma_size']
+        # sigma_size = torch.tensor(sigma_size, device="cuda")
+        sigma_size = sigma_size.to(device='cuda')
+        print('loaded sigma_size: ')
+        print(sigma_size)
+    else:
+        sigma_size = torch.ones(1, device="cuda")*3.8445
+        print('setting sigma_size: ')
+        print(sigma_size)
+
     calib = {}
     calib['Tr'] = np.eye(4)
-    poses = read_poses_file(config.pose_path, calib)
-    
-    sigma_size = torch.nn.Parameter(torch.ones(1, device="cuda")*1.0) 
+    poses = read_poses_file(config.pose_path, calib)    
+
+    tran = np.array([[0, 0, 1, 0],
+                        [-1, 0, 0, 0],
+                        [0, -1, 0, 0],
+                        [0,0,0,1]])
+
+    pose = poses[99] @ tran
 
     depth_img, color_img = render_img(config, sdf_octree, color_octree, sdf_mlp, color_mlp,
-                                      poses[0], sigma_size, "cuda")
+                                      pose, sigma_size, "cuda")
     
     depth_array = depth_img.cpu().numpy()
     color_array = color_img.cpu().numpy()

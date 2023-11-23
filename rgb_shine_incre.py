@@ -190,7 +190,7 @@ def run_shine_mapping_incremental():
                 cdr_loss = color_depth_rendering_loss(sample_depth, pred_ray, ray_depth, color_pred, color_label, neus_on=False)
             elif config.main_loss_type == "dr_neus":
                 cdr_loss = color_depth_rendering_loss(sample_depth, pred_ray, ray_depth, color_pred, color_label, neus_on=True)
-            cur_loss += cdr_loss
+            cur_loss += cdr_loss * config.cr_loss_weight
 
             weight = torch.abs(weight)
             sdf_loss = sdf_bce_loss(sdf_pred, sdf_label, sigma_sigmoid, weight, config.loss_weight_on, config.loss_reduction) 
@@ -299,7 +299,7 @@ def run_shine_mapping_incremental():
         if ((processed_frame+1) % config.save_freq_frame == 0 or frame_id == config.end_frame) and processed_frame > 0:
             checkpoint_name = 'model/model_frame_' + str(frame_id+1)
             # octree.clear_temp()
-            save_checkpoint(sdf_octree, color_octree, sdf_mlp, color_mlp, opt, run_path, checkpoint_name, frame_id + 1)
+            save_checkpoint(sdf_octree, color_octree, sdf_mlp, color_mlp, opt, run_path, checkpoint_name, frame_id + 1, sigma_size)
             save_decoder(sdf_mlp, color_mlp, run_path, checkpoint_name) # save both the gro and sem decoders
 
         processed_frame += 1

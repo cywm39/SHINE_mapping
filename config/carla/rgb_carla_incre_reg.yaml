@@ -10,7 +10,7 @@ setting:
   model_path: "" 
   first_frame_ref: False
   begin_frame: 0
-  end_frame: 5748
+  end_frame: 1001
   every_frame: 1 # 1 means does not skip
   device: "cuda"
   gpu_id: "0"
@@ -44,7 +44,7 @@ sampler:
   free_sample_n: 3
 octree:
   leaf_vox_size: 0.1 #default: 0.2
-  tree_level_world: 12
+  tree_level_world: 13 # default: 12
   tree_level_feat: 3 # default: 3
   color_tree_level_feat: 3
   feature_dim: 32 # default: 8
@@ -78,9 +78,10 @@ optimizer:
   learning_rate: 0.01
   calibration_lr: 0.0
   weight_decay: 1e-7 # l2 regularization
+  cr_loss_weight: 1e4
 rendering:
   ray_batch_size: 10000
-  pc_map_path:
+  pc_map_path: "/home/wuchenyang/NeRF/dataset/carla/2023_11_14/combined_1000.pcd"
   N_samples: 32
   N_surface: 16
   N_importance: 0
@@ -89,11 +90,10 @@ eval:
   o3d_vis_on: False # visualize the mapping or not
   vis_freq_iters: 0 
   save_freq_iters: 1000 # save the model and octree every x iterations
-  save_freq_frame: 1000 # save the model and octree every x frames
-  mesh_freq_frame: 100 # reconstruct the mesh every x frames
+  save_freq_frame: 100 # save the model and octree every x frames
+  mesh_freq_frame: 50 # reconstruct the mesh every x frames
   mc_res_m: 0.1 # reconstruction marching cubes resolution. default: 0.1
   mc_with_octree: True # querying sdf only in certain levels of the octree
   mc_local: False
   mc_vis_level: 1 # default: 1
   save_map: True # save the sdf map or not. default: False
-

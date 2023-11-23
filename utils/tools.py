@@ -220,7 +220,7 @@ def unfreeze_model(model: nn.Module):
 
 
 def save_checkpoint(
-    sdf_octree, color_octree, sdf_decoder, color_decoder, optimizer, run_path, checkpoint_name, frame
+    sdf_octree, color_octree, sdf_decoder, color_decoder, optimizer, run_path, checkpoint_name, frame, sigma_size
 ):
     torch.save(
         {
@@ -229,6 +229,7 @@ def save_checkpoint(
             "color_octree": color_octree,
             "sdf_decoder": sdf_decoder.state_dict(),
             "color_decoder": color_decoder.state_dict(),
+            "sigma_size": sigma_size, 
             "optimizer": optimizer.state_dict(),
         },
         os.path.join(run_path, f"{checkpoint_name}.pth"),
