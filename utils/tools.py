@@ -75,7 +75,7 @@ def setup_optimizer(config: SHINEConfig, sdf_octree_feat, color_octree_feat, sdf
     if config.semantic_on and mlp_sem_param is not None:
         mlp_sem_param_opt_dict = {'params': mlp_sem_param, 'lr': lr_cur, 'weight_decay': config.weight_decay} 
         opt_setting.append(mlp_sem_param_opt_dict)
-    if lidar2camera_matrix is not None:
+    if config.opt_calibration and lidar2camera_matrix is not None:
         lidar2camera_matrix_param_opt_dict = {'params': [lidar2camera_matrix], 'lr': config.calibration_lr, 'weight_decay': config.weight_decay}
         opt_setting.append(lidar2camera_matrix_param_opt_dict)
     # feature octree

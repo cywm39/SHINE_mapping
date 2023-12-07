@@ -193,6 +193,7 @@ class SHINEConfig:
         self.opt_adam: bool = True  # use adam or sgd
         self.bs: int = 4096
         self.lr: float = 1e-3 # optimizer的初始lr
+        self.opt_calibration: bool = False
         self.calibration_lr: float = 1e-3 # 外参矩阵的lr
         self.weight_decay: float = 0
         self.adam_eps: float = 1e-15
@@ -204,6 +205,7 @@ class SHINEConfig:
 
         # rendering
         self.ray_batch_size: int = 10000
+        self.point_batch_size: int = 20000
         self.pc_map_path: str = ""  # whole point cloud map path
         self.N_samples: int = 32
         self.N_surface: int = 16
@@ -387,6 +389,7 @@ class SHINEConfig:
         self.bs = config_args["optimizer"]["batch_size"]
         # self.adam_eps = float(config_args["optimizer"]["adam_eps"])
         self.lr = float(config_args["optimizer"]["learning_rate"])
+        self.opt_calibration = config_args["optimizer"]["opt_calibration"]
         self.calibration_lr = float(config_args["optimizer"]["calibration_lr"])
         # self.lr_level_reduce_ratio = config_args["optimizer"][
         #     "lr_level_reduce_ratio"
@@ -399,6 +402,7 @@ class SHINEConfig:
 
         #rendering
         self.ray_batch_size = config_args["rendering"]["ray_batch_size"]
+        self.point_batch_size = config_args["rendering"]["point_batch_size"]
         self.pc_map_path = config_args["rendering"]["pc_map_path"]
         self.N_samples = config_args["rendering"]["N_samples"]
         self.N_surface = config_args["rendering"]["N_surface"]

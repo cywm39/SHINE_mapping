@@ -1,5 +1,5 @@
 setting:
-  name: "rgb_carla_incre_reg"
+  name: "rgb_carla_batch"
   output_root: "./experiments/"
   pc_path: "/home/wuchenyang/NeRF/dataset/carla/2023_11_14/livox_pc"
   image_path: "/home/wuchenyang/NeRF/dataset/carla/2023_11_14/image"
@@ -10,7 +10,7 @@ setting:
   model_path: "" 
   first_frame_ref: False
   begin_frame: 0
-  end_frame: 5748
+  end_frame: 1001
   every_frame: 1 # 1 means does not skip
   device: "cuda"
   gpu_id: "0"
@@ -21,14 +21,14 @@ camera:
   fy: 400.
   cx: 400.
   cy: 300.
-  camera_ext_matrix: [1., 0., 0., 0.,
-                      0., 0.93969262, 0.34202014, -0.37587705,
-                      0., -0.34202014, 0.93969262, 0.13680806,
-                      0., 0., 0., 1.]
-  # camera_ext_matrix: [-0.00113207, -0.9999999, 0.000504622, 0, 
-  #                     -0.0158688,  -0.000486594, -0.999874, 0,
-  #                     0.999873,  -0.00113994,  -0.0158682, 0,
-  #                     0, 0, 0, 1]
+  # camera_ext_matrix: [[ 1.00000000e+00, 0.00000000e+00, 0.00000000e+00, 4.44089210e-16],
+  #                   [ 0.00000000e+00, 9.39692621e-01, 3.42020143e-01, -3.75877048e-01],
+  #                   [ 0.00000000e+00, -3.42020143e-01, 9.39692621e-01, 1.36808057e-01],
+  #                   [ 0.00000000e+00, 0.00000000e+00, 0.00000000e+00, 1.00000000e+00]]
+  camera_ext_matrix: [[ 1.,  0.        ,  0.        , -0.4],
+                      [ 0.,  0.93969262,  0.34202014,  0. ],
+                      [ 0., -0.34202014,  0.93969262,  0. ],
+                      [ 0.,  0.        ,  0.        ,  1. ]]
 process:
   min_range_m: 1.5 # default: 3.0
   pc_radius_m: 50.0  # distance filter for each frame. Default value is 25.0
@@ -73,7 +73,7 @@ continual:
   window_replay_on: False # replay within the sliding window
   window_radius_m: 0
 optimizer:
-  iters: 300  # iterations per frame. default value is 50.
+  iters: 100000  # iterations per frame. default value is 50.
   batch_size: 4096
   learning_rate: 0.01
   opt_calibration: False
@@ -82,17 +82,18 @@ optimizer:
   cr_loss_weight: 1e4
 rendering:
   ray_batch_size: 10000
-  pc_map_path: "/home/wuchenyang/NeRF/dataset/carla/2023_11_14/combined_1000.pcd"
-  N_samples: 32
+  point_batch_size: 20000
+  pc_map_path: "/home/wuchenyang/NeRF/dataset/carla/2023_11_14/combined_600_filtered.pcd"
+  N_samples: 0
   N_surface: 16
   N_importance: 0
 eval:
   wandb_vis_on: True # log to wandb or not. default: False
   o3d_vis_on: False # visualize the mapping or not
-  vis_freq_iters: 0 
-  save_freq_iters: 1000 # save the model and octree every x iterations
-  save_freq_frame: 100 # save the model and octree every x frames
-  mesh_freq_frame: 100 # reconstruct the mesh every x frames
+  vis_freq_iters: 10000 
+  save_freq_iters: 10000 # save the model and octree every x iterations
+  save_freq_frame: 0 # save the model and octree every x frames
+  mesh_freq_frame: 0 # reconstruct the mesh every x frames
   mc_res_m: 0.1 # reconstruction marching cubes resolution. default: 0.1
   mc_with_octree: True # querying sdf only in certain levels of the octree
   mc_local: False

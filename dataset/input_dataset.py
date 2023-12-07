@@ -165,16 +165,18 @@ class InputDataset(Dataset):
         frame_image = imageio.imread(image_filename)
 
         # carla dataset only---------------------------------#
+        # change carla axis defination to normal axis defination
+        # because the code below (2 steps filter) must run under normal axis defination
         points3d_lidar = np.asarray(frame_pc.points, dtype=np.float32)
         points3d_lidar = np.insert(points3d_lidar, 3, 1, axis=1)
         tran = np.array([[0, 0, 1, 0],
                         [-1, 0, 0, 0],
                         [0, -1, 0, 0],
                         [0,0,0,1]])
-        points3d_lidar = points3d_lidar @ tran
+        points3d_lidar = points3d_lidar @ tran # 'tran' matrix only can be used to multiply with point cloud
         points3d_lidar = points3d_lidar[:, :-1]
         frame_pc.points = o3d.utility.Vector3dVector(points3d_lidar)
-        self.cur_pose_ref = self.cur_pose_ref @ tran
+        # self.cur_pose_ref = self.cur_pose_ref @ tran
         # carla dataset only---------------------------------#
 
         # block filter: crop the point clouds into a cube
@@ -251,6 +253,19 @@ class InputDataset(Dataset):
         # 取出图像内uv坐标对应的颜色
         frame_color_label = torch.tensor(frame_image[points2d_camera[:,1].astype(int), points2d_camera[:,0].astype(int)], 
                                          device=self.pool_device)
+        # carla dataset only---------------------------------#
+        # change normal axis defination back to carla axis defination
+        # because cur_pose_ref is under carla axis defination
+        # so if we need to pointcloud.transform(cur_pose_ref), we need to change pc back to carla axis defination
+        frame_pc_points = np.insert(frame_pc_points, 3, 1, axis=1)
+        tran = np.array([[0, 0, 1, 0],
+                        [-1, 0, 0, 0],
+                        [0, -1, 0, 0],
+                        [0,0,0,1]])
+        frame_pc_points = tran @ frame_pc_points.T
+        frame_pc_points = frame_pc_points.T
+        frame_pc_points = frame_pc_points[:, :-1]
+        # carla dataset only---------------------------------#
         frame_pc.points = o3d.utility.Vector3dVector(frame_pc_points)
         # 上面这几步旨在将frame_pc中的点映射到图片上，对应位置的像素点颜色形成一个新的pool，顺序与frame_pc中点的顺序相同
         # 之后get_batch的时候，类似于从ray_depth_pool获取ray的深度，同样可以直接获取ray的颜色
@@ -400,13 +415,12 @@ class InputDataset(Dataset):
             # concat with current observations
             self.coord_pool = torch.cat((self.coord_pool, coord.to(self.pool_device)), 0)            
             self.weight_pool = torch.cat((self.weight_pool, weight.to(self.pool_device)), 0)
-            if self.config.ray_loss:
-                self.sample_depth_pool = torch.cat((self.sample_depth_pool, sample_depth.to(self.pool_device)), 0)
-                self.ray_depth_pool = torch.cat((self.ray_depth_pool, ray_depth.to(self.pool_device)), 0)
-            else:
-                self.sdf_label_pool = torch.cat((self.sdf_label_pool, sdf_label.to(self.pool_device)), 0)
-                self.origin_pool = torch.cat((self.origin_pool, origin_repeat.to(self.pool_device)), 0)
-                self.time_pool = torch.cat((self.time_pool, time_repeat.to(self.pool_device)), 0)
+            self.color_label_pool = torch.cat((self.color_label_pool, frame_color_label.to(self.pool_device)), 0)
+            self.sample_depth_pool = torch.cat((self.sample_depth_pool, sample_depth.to(self.pool_device)), 0)
+            self.ray_depth_pool = torch.cat((self.ray_depth_pool, ray_depth.to(self.pool_device)), 0)
+            self.sdf_label_pool = torch.cat((self.sdf_label_pool, sdf_label.to(self.pool_device)), 0)
+            self.origin_pool = torch.cat((self.origin_pool, origin_repeat.to(self.pool_device)), 0)
+            self.time_pool = torch.cat((self.time_pool, time_repeat.to(self.pool_device)), 0)
 
             if normal_label is not None:
                 self.normal_label_pool = torch.cat((self.normal_label_pool, normal_label.to(self.pool_device)), 0)

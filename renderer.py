@@ -19,18 +19,86 @@ def get_rays(H, W, fx, fy, cx, cy, c2w, device):
     Get rays for a whole image.
 
     """
+    tran = np.array([[0, 0, 1, 0],
+                    [-1, 0, 0, 0],
+                    [0, -1, 0, 0],
+                    [0,0,0,1]])
     if isinstance(c2w, np.ndarray):
-        c2w = torch.from_numpy(c2w).to(device)
+        c2w = torch.from_numpy(c2w).to(device).float()
     # pytorch's meshgrid has indexing='ij'
     i, j = torch.meshgrid(torch.linspace(0, W-1, W), torch.linspace(0, H-1, H))
     i = i.t()  # transpose
     j = j.t()
+    # dirs = torch.stack(
+    #     [(i-cx)/fx, -(j-cy)/fy, -torch.ones_like(i)], -1).to(device)
     dirs = torch.stack(
-        [(i-cx)/fx, -(j-cy)/fy, -torch.ones_like(i)], -1).to(device)
-    dirs = dirs.reshape(H, W, 1, 3)
+        [-(i-cx)/fx, -(j-cy)/fy, torch.ones_like(i)], -1).to(device)
+
+    # dirs = dirs.reshape(H, W, 1, 3)
     # Rotate ray directions from camera frame to the world frame
     # dot product, equals to: [c2w.dot(dir) for dir in dirs]
-    rays_d = torch.sum(dirs * c2w[:3, :3], -1)
+    # rays_d = torch.sum(dirs * c2w[:3, :3], -1)
+    
+    dirs = dirs.reshape(-1, 3)
+    rays_d = c2w[:3, :3] @ dirs.T
+    rays_d = rays_d.T
+
+    rays_d = rays_d.cpu().numpy()
+    rays_d = np.insert(rays_d, 3, 1, axis=1)
+    rays_d = rays_d @ tran
+    rays_d = rays_d[:, :-1]
+    rays_d = torch.from_numpy(rays_d).to(device)
+
+    rays_d = rays_d.reshape(H, W ,3)
+
+    rays_o = c2w[:3, -1].expand(rays_d.shape)
+    return rays_o, rays_d
+
+
+def get_rays_bp(H, W, fx, fy, cx, cy, c2w, device):
+    """
+    Get rays for a whole image.
+
+    """
+    tran = np.array([[0, 0, 1, 0],
+                    [-1, 0, 0, 0],
+                    [0, -1, 0, 0],
+                    [0,0,0,1]])
+    # pytorch's meshgrid has indexing='ij'
+    i, j = torch.meshgrid(torch.linspace(0, W-1, W), torch.linspace(0, H-1, H))
+    i = i.t()  # transpose
+    j = j.t()
+    # dirs = torch.stack(
+    #     [(i-cx)/fx, -(j-cy)/fy, -torch.ones_like(i)], -1).to(device)
+    dirs = torch.stack(
+        [(i-cx)/fx, (j-cy)/fy, torch.ones_like(i)], -1).to(device)
+
+    # dirs = dirs.reshape(H, W, 1, 3)
+    # Rotate ray directions from camera frame to the world frame
+    # dot product, equals to: [c2w.dot(dir) for dir in dirs]
+    # rays_d = torch.sum(dirs * c2w[:3, :3], -1)
+    
+    dirs = dirs.reshape(-1, 3)
+    dirs = dirs.cpu().numpy()
+    dirs = np.insert(dirs, 3, 1, axis=1)
+    dirs = tran @ dirs.T
+    dirs = dirs.T
+    dirs = dirs[:, :-1]
+
+    rays_d = c2w[:3, :3] @ dirs.T
+    rays_d = rays_d.T
+
+    if isinstance(c2w, np.ndarray):
+        c2w = torch.from_numpy(c2w).to(device).float()
+
+    # rays_d = rays_d.cpu().numpy()
+    # rays_d = np.insert(rays_d, 3, 1, axis=1)
+    # rays_d = rays_d @ tran
+    # rays_d = rays_d[:, :-1]
+    rays_d = torch.from_numpy(rays_d).to(device)
+
+    rays_d = rays_d.reshape(H, W ,3)
+
     rays_o = c2w[:3, -1].expand(rays_d.shape)
     return rays_o, rays_d
 
@@ -214,6 +282,10 @@ def render_batch_ray(config: SHINEConfig, sdf_octree, color_octree, sdf_mlp, col
         color_feature = color_octree.query_feature(pointsf)
         sdf_pred = sdf_mlp.predict_sdf(sdf_feature)
         color_pred = color_mlp.predict_color(color_feature)
+        
+        color_norm = np.clip(color_pred.detach().cpu().numpy(), 0, 255)
+        color_norm /= 255.0
+        color_pred = torch.tensor(color_norm, device=device)
 
         pred_occ = torch.sigmoid(sdf_pred/sigma_size)
         pred_ray = pred_occ.reshape(N_rays, -1)
@@ -247,6 +319,10 @@ def render_batch_ray(config: SHINEConfig, sdf_octree, color_octree, sdf_mlp, col
             sdf_pred = sdf_mlp.predict_sdf(sdf_feature)
             color_pred = color_mlp.predict_color(color_feature)
 
+            color_norm = np.clip(color_pred.detach().cpu().numpy(), 0, 255)
+            color_norm /= 255.0
+            color_pred = torch.tensor(color_norm, device=device)
+
             pred_occ = torch.sigmoid(sdf_pred/sigma_size)
             pred_ray = pred_occ.reshape(N_rays, -1)
             color_pred = color_pred.reshape(N_rays, -1, 3)
@@ -262,9 +338,9 @@ def render_batch_ray(config: SHINEConfig, sdf_octree, color_octree, sdf_mlp, col
 
             depth = torch.sum(weights * z_vals, -1)
     
-            return depth, color_render
+            return depth, color_render, pts
 
-        return depth, color_render
+        return depth, color_render, pointsf
 
 
         
@@ -294,6 +370,8 @@ def render_img(config: SHINEConfig, sdf_octree, color_octree, sdf_mlp, color_mlp
             W = config.W
             rays_o, rays_d = get_rays(
                 H, W, config.fx, config.fy, config.cx, config.cy, c2w, device)
+            # rays_o, rays_d = calculate_camera_ray_params(
+            #     H, W, config.fx, config.fy, config.cx, config.cy, c2w, device)
             rays_o = rays_o.reshape(-1, 3)
             rays_d = rays_d.reshape(-1, 3)
 
@@ -302,6 +380,10 @@ def render_img(config: SHINEConfig, sdf_octree, color_octree, sdf_mlp, color_mlp
             pc_map = pc_map.transform(np.linalg.inv(L2w))
             points3d_lidar = np.asarray(pc_map.points, dtype=np.float64)
             points3d_lidar = np.insert(points3d_lidar, 3, 1, axis=1)
+            points3d_lidar = points3d_lidar @ np.array([[0, 0, 1, 0],
+                                                [-1, 0, 0, 0],
+                                                [0, -1, 0, 0],
+                                                [0,0,0,1]]).reshape(4,4)
             points3d_camera = lidar2camera_matrix @ points3d_lidar.T
             H, W, fx, fy, cx, cy, = config.H, config.W, config.fx, config.fy, config.cx, config.cy
             K = np.array([[fx, .0, cx, .0], [.0, fy, cy, .0], [.0, .0, 1.0, .0]]).reshape(3, 4)
@@ -335,6 +417,7 @@ def render_img(config: SHINEConfig, sdf_octree, color_octree, sdf_mlp, color_mlp
             depth_list = []
             uncertainty_list = []
             color_list = []
+            points_list = []
 
             ray_batch_size = config.ray_batch_size
 
@@ -352,21 +435,88 @@ def render_img(config: SHINEConfig, sdf_octree, color_octree, sdf_mlp, color_mlp
                         config, sdf_octree, color_octree, sdf_mlp, color_mlp, 
                         rays_d_batch, rays_o_batch, device, sigma_size, gt_depth=gt_depth_batch)
 
-                depth, color = ret
+                depth, color, points_batch = ret
                 depth_list.append(depth.double())
                 color_list.append(color)
+                points_list.append(points_batch)
 
             depth = torch.cat(depth_list, dim=0)
             color = torch.cat(color_list, dim=0)
+            points = torch.cat(points_list, dim=0)
+            points = points.cpu().numpy()
 
             depth = depth.reshape(H, W)
             color = color.reshape(H, W, 3)
-            return depth, color
+            pcd = o3d.geometry.PointCloud()
+            pcd.points = o3d.utility.Vector3dVector(points)
+            pcd = pcd.scale(1.0 / config.scale, center=(0,0,0))
 
+            return depth, color, pcd
+
+
+def render_from_pc(config: SHINEConfig, sdf_octree, color_octree, sdf_mlp, color_mlp, L2w, sigma_size, device):
+    pc_map = o3d.io.read_point_cloud(config.pc_map_path)
+    pc_map = pc_map.transform(np.linalg.inv(L2w))
+    points3d_lidar = np.asarray(pc_map.points, dtype=np.float64)
+    points3d_lidar = np.insert(points3d_lidar, 3, 1, axis=1)
+    points3d_camera = lidar2camera_matrix @ points3d_lidar.T
+    H, W, fx, fy, cx, cy, = config.H, config.W, config.fx, config.fy, config.cx, config.cy
+    K = np.array([[fx, .0, cx, .0], [.0, fy, cy, .0], [.0, .0, 1.0, .0]]).reshape(3, 4)
+    # 过滤掉相机坐标系内位于相机之后的点
+    tmp_mask = points3d_camera[2, :] > 0.0
+    points3d_camera = points3d_camera[:, tmp_mask]
+    points3d_camera_tmp = np.copy(points3d_camera)
+    points2d_camera = K @ points3d_camera
+    points2d_camera = (points2d_camera[:2, :] / points2d_camera[2, :]).T # 操作之后points2d_camera维度:[n, 2]
+    tmp_mask = np.logical_and(
+        (points2d_camera[:, 1] < H) & (points2d_camera[:, 1] > 0),
+        (points2d_camera[:, 0] < W) & (points2d_camera[:, 0] > 0)
+    )
+    points2d_camera = points2d_camera[tmp_mask]
+    points3d_camera_tmp = points3d_camera_tmp[:, tmp_mask]
+    depth_image = np.zeros((H, W))
+    test_image = np.zeros((H, W, 3))
+    depth_image[points2d_camera[:,1].astype(int), points2d_camera[:,0].astype(int)] = points3d_camera_tmp[2, :]
+    test_image[points2d_camera[:,1].astype(int), points2d_camera[:,0].astype(int)] = np.array([255,255,255])
+
+    depth_test = Image.fromarray((depth_image).astype(np.uint8))  # 假设深度值范围为 [0, 1]
+    color_test = Image.fromarray((test_image).astype(np.uint8))  # 假设颜色值范围为 [0, 1]
+    depth_test.save('./test_result/test_depth.png')
+    color_test.save('./test_result/test_color.png')
+
+
+def render_color_pc(config: SHINEConfig, sdf_octree, color_octree, sdf_mlp, color_mlp, device):
+    pc_map = o3d.io.read_point_cloud(config.pc_map_path)
+    pc_map = pc_map.scale(config.scale, center=(0,0,0))
+    points3d = np.asarray(pc_map.points, dtype=np.float64)
+    color = np.ones_like(points3d)
+    # color_points[:, 3:] = np.array([57,197,187])
+
+    for i in range(0, points3d.shape[0], config.point_batch_size):
+        points_batch = points3d[i:i+config.point_batch_size]
+        points_batch = torch.tensor(points_batch, device=device)
+
+        sdf_feature = sdf_octree.query_feature(points_batch)
+        color_feature = color_octree.query_feature(points_batch)
+        sdf_pred = sdf_mlp.predict_sdf(sdf_feature)
+        color_pred = color_mlp.predict_color(color_feature)
+
+        color[i:i+config.point_batch_size] = color_pred.detach().cpu().numpy()
+
+    color = np.clip(color, 0, 255)
+    color /= 255.0
+    # 将numpy数组转换为Open3D的点云数据结构
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(points3d)  # 提取点的坐标
+    pcd.colors = o3d.utility.Vector3dVector(color)  # 提取点的颜色
+    pcd = pcd.scale(1.0 / config.scale, center=(0,0,0))
+
+    return pcd
+    
 
 if __name__ == "__main__":
     config = SHINEConfig()
-    config.load('/home/wuchenyang/NeRF/SHINE_mapping/config/carla/rgb_carla_incre_reg.yaml')
+    config.load('/home/wuchenyang/NeRF/SHINE_mapping/config/carla/rgb_carla_batch.yaml')
 
     sdf_octree = FeatureOctree(config, is_color=False)
     color_octree = FeatureOctree(config, is_color=True)
@@ -374,7 +524,7 @@ if __name__ == "__main__":
     sdf_mlp = SDFDecoder(config)
     color_mlp = ColorDecoder(config)
 
-    loaded_model = torch.load('/home/wuchenyang/NeRF/SHINE_mapping/experiments/rgb_carla_incre_reg_2023-11-22_22-39-35/model/model_frame_100.pth')
+    loaded_model = torch.load('/home/wuchenyang/NeRF/SHINE_mapping/experiments/rgb_carla_batch_2023-11-24_00-49-02/model/model_iter_100000.pth')
     sdf_mlp.load_state_dict(loaded_model["sdf_decoder"])
     color_mlp.load_state_dict(loaded_model["color_decoder"])
 
@@ -397,6 +547,11 @@ if __name__ == "__main__":
         print('setting sigma_size: ')
         print(sigma_size)
 
+    # #-------------------------------render a pc with color---------------------------------
+    # color_pc = render_color_pc(config, sdf_octree, color_octree, sdf_mlp, color_mlp, 'cuda')
+    # o3d.io.write_point_cloud("./test_result/colored_point_cloud.pcd", color_pc)
+    # #-------------------------------render a pc with color---------------------------------
+
     calib = {}
     calib['Tr'] = np.eye(4)
     poses = read_poses_file(config.pose_path, calib)    
@@ -406,20 +561,45 @@ if __name__ == "__main__":
                         [0, -1, 0, 0],
                         [0,0,0,1]])
 
-    pose = poses[99] @ tran
+    pose =  poses[400] 
 
-    depth_img, color_img = render_img(config, sdf_octree, color_octree, sdf_mlp, color_mlp,
+    # #--------------------test--------------------------
+    # print(pose)
+    # camera2lidar_matrix = config.camera_ext_matrix
+    # lidar2camera_matrix = np.linalg.inv(camera2lidar_matrix)
+    # c2w = pose @ lidar2camera_matrix
+
+    # H = config.H
+    # W = config.W
+    # rays_o, rays_d = get_rays(
+    #     H, W, config.fx, config.fy, config.cx, config.cy, c2w, 'cuda')
+    # rays_o = rays_o.reshape(-1, 3)
+    # rays_d = rays_d.reshape(-1, 3)
+    # t_vals = torch.linspace(0., 1., steps=32, device='cuda')
+    # z_vals = 0.1 * (1.-t_vals) + 20 * (t_vals)
+    # pts = rays_o[..., None, :] + rays_d[..., None, :] * \
+    #     z_vals[..., :, None]  # [N_rays, N_samples+N_surface, 3]
+    # pointsf = pts.reshape(-1, 3)
+    # pointsf = pointsf.cpu().numpy()
+    # # pointsf = np.insert(pointsf, 3, 1, axis=1)
+    # # pointsf = pointsf @ tran
+    # # pointsf = pointsf[:, :-1]
+    # pcd = o3d.geometry.PointCloud()
+    # pcd.points = o3d.utility.Vector3dVector(pointsf)
+    # o3d.io.write_point_cloud("./test_result/ray_test_point_cloud.pcd", pcd)
+    # #--------------------test--------------------------
+
+    depth_img, color_img, sample_pc = render_img(config, sdf_octree, color_octree, sdf_mlp, color_mlp,
                                       pose, sigma_size, "cuda")
     
     depth_array = depth_img.cpu().numpy()
     color_array = color_img.cpu().numpy()
 
     # 创建 PIL Image 对象
-    depth_image = Image.fromarray((depth_array).astype(np.uint8))  # 假设深度值范围为 [0, 1]
-    color_image = Image.fromarray((color_array).astype(np.uint8))  # 假设颜色值范围为 [0, 1]
+    depth_image = Image.fromarray((depth_array * 255).astype(np.uint8))  # 假设深度值范围为 [0, 1]
+    color_image = Image.fromarray((color_array * 255).astype(np.uint8))  # 假设颜色值范围为 [0, 1]
 
     # 保存图像
     depth_image.save('./test_result/depth_image.png')
     color_image.save('./test_result/color_image.png')
-
-
+    o3d.io.write_point_cloud("./test_result/sample_point_cloud.pcd", sample_pc)

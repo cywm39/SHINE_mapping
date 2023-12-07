@@ -57,7 +57,8 @@ def run_shine_mapping_batch():
             octree.print_detail()
 
     camera2lidar_matrix = config.camera_ext_matrix
-    lidar2camera_matrix = torch.tensor(np.linalg.inv(camera2lidar_matrix), dtype=config.dtype, device="cuda", requires_grad=False)
+    lidar2camera_matrix = torch.tensor(np.linalg.inv(camera2lidar_matrix), dtype=config.dtype, 
+                                            device="cuda", requires_grad=config.opt_calibration)
 
     # dataset
     dataset = InputDataset(config, sdf_octree, color_octree, lidar2camera_matrix)
@@ -71,8 +72,16 @@ def run_shine_mapping_batch():
     
     # for each frame
     print("Load, preprocess and sample data")
-    # preprocess, sample data and update the octree
-    dataset.process_frame_batch()
+    for frame_id in tqdm(range(dataset.total_pc_count)):
+        if (frame_id < config.begin_frame or frame_id > config.end_frame or \
+            frame_id % config.every_frame != 0): 
+            continue
+        
+        t0 = get_time()  
+        # preprocess, sample data and update the octree
+        dataset.process_frame(frame_id)
+        t1 = get_time()
+        # print("data preprocessing and sampling time (s): %.3f" %(t1 - t0))
     # print("data preprocessing and sampling time (s): %.3f" %(t1 - t0))
 
     # learnable parameters
@@ -157,7 +166,7 @@ def run_shine_mapping_batch():
         sample_depth = sample_depth.reshape(config.bs, -1)
         color_pred = color_pred.reshape(config.bs, -1, 3)
         cdr_loss = color_depth_rendering_loss(sample_depth, pred_ray, ray_depth, color_pred, color_label, neus_on=False)
-        cur_loss += cdr_loss
+        cur_loss += cdr_loss * config.cr_loss_weight
         weight = torch.abs(weight)
         sdf_loss = sdf_bce_loss(sdf_pred, sdf_label, sigma_sigmoid, weight, config.loss_weight_on, config.loss_reduction) 
         cur_loss += sdf_loss
@@ -183,7 +192,11 @@ def run_shine_mapping_batch():
         T4 = get_time()
 
         opt.zero_grad(set_to_none=True)
-        cur_loss.backward()
+        if config.opt_calibration:
+            cur_loss.backward(retain_graph=True)
+        else:
+            cur_loss.backward()
+        
         opt.step()
 
         T5 = get_time()
@@ -194,7 +207,7 @@ def run_shine_mapping_batch():
                 wandb_log_content = {'iter': iter, 'loss/total_loss': cur_loss, 
                                      'loss/color_render_loss': cdr_loss, 'loss/sdf_loss': sdf_loss, 
                                      'loss/eikonal_loss': eikonal_loss, 'loss/normal_loss': normal_loss, 
-                                     'para/sigma': sigma_size}
+                                     'para/sigma': sigma_size.item()}
             wandb_log_content['timing(s)/load'] = T1 - T0
             wandb_log_content['timing(s)/get_indices'] = T2 - T1
             wandb_log_content['timing(s)/inference'] = T3 - T2
@@ -207,7 +220,7 @@ def run_shine_mapping_batch():
         if (((iter+1) % config.save_freq_iters) == 0 and iter > 0):
             checkpoint_name = 'model/model_iter_' + str(iter+1)
             # octree.clear_temp()
-            save_checkpoint(sdf_octree, color_octree, sdf_mlp, color_mlp, opt, run_path, checkpoint_name, iter)
+            save_checkpoint(sdf_octree, color_octree, sdf_mlp, color_mlp, opt, run_path, checkpoint_name, iter, sigma_size)
             save_decoder(sdf_mlp, color_mlp, run_path, checkpoint_name)
 
         # reconstruction by marching cubes
